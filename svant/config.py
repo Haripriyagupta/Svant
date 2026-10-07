@@ -53,7 +53,7 @@ class Settings:
 
     def __init__(self) -> None:
         self.app_name: str = "SVANT"
-        self.version: str = "0.1.0"
+        self.version: str = "0.2.0"
         self.env: str = os.getenv("SVANT_ENV", "development")
         self.host: str = os.getenv("SVANT_HOST", "127.0.0.1")
         self.port: int = int(os.getenv("SVANT_PORT", "8000"))
@@ -68,9 +68,19 @@ class Settings:
 
         self.db_path: Path = self.data_dir / "svant.db"
         self.log_dir: Path = self.data_dir / "logs"
+        self.models_dir: Path = self.data_dir / "models"
+        self.indexes_dir: Path = self.data_dir / "indexes"
 
         # Scanning and extraction limits
         self.max_extract_size_mb: int = int(os.getenv("SVANT_MAX_EXTRACT_SIZE_MB", "15"))
+
+        # Phase 2 Local Intelligence Settings
+        self.embedding_model: str = os.getenv("SVANT_EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
+        self.embedding_batch_size: int = int(os.getenv("SVANT_EMBEDDING_BATCH_SIZE", "32"))
+        self.chunk_size: int = int(os.getenv("SVANT_CHUNK_SIZE", "500"))
+        self.chunk_overlap: int = int(os.getenv("SVANT_CHUNK_OVERLAP", "50"))
+        self.hybrid_semantic_weight: float = float(os.getenv("SVANT_HYBRID_SEMANTIC_WEIGHT", "0.6"))
+        self.hybrid_keyword_weight: float = float(os.getenv("SVANT_HYBRID_KEYWORD_WEIGHT", "0.4"))
 
         raw_exclusions = os.getenv(
             "SVANT_EXCLUDED_DIRS",
@@ -93,6 +103,8 @@ class Settings:
         try:
             self.data_dir.mkdir(parents=True, exist_ok=True)
             self.log_dir.mkdir(parents=True, exist_ok=True)
+            self.models_dir.mkdir(parents=True, exist_ok=True)
+            self.indexes_dir.mkdir(parents=True, exist_ok=True)
         except Exception as e:
             # If default path failed (e.g. permission or missing drive), fallback to local data dir
             local_fallback = _project_root / "data"
@@ -100,7 +112,11 @@ class Settings:
             self.data_dir = local_fallback
             self.db_path = self.data_dir / "svant.db"
             self.log_dir = self.data_dir / "logs"
+            self.models_dir = self.data_dir / "models"
+            self.indexes_dir = self.data_dir / "indexes"
             self.log_dir.mkdir(parents=True, exist_ok=True)
+            self.models_dir.mkdir(parents=True, exist_ok=True)
+            self.indexes_dir.mkdir(parents=True, exist_ok=True)
 
 
 # Singleton settings instance

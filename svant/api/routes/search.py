@@ -18,17 +18,21 @@ def get_search_service() -> SearchService:
 
 @router.get("", response_model=SearchResponse)
 def search_files(
-    q: str = Query(..., min_length=1, description="Keyword search term"),
+    q: str = Query(..., min_length=1, description="Search term or natural language query"),
     project_id: Optional[str] = Query(None, description="Optional project filter"),
-    mode: str = Query("keyword", description="Search mode: keyword (Phase 1), semantic (Phase 2), hybrid (Phase 2)"),
+    mode: str = Query("keyword", description="Search mode: keyword, semantic, hybrid"),
     limit: int = Query(25, ge=1, le=100),
     offset: int = Query(0, ge=0),
 ) -> SearchResponse:
-    """Execute keyword full-text search against indexed files."""
+    """Execute keyword (FTS5), semantic (FAISS), or hybrid search across indexed files."""
     service = get_search_service()
-    search_mode = SearchMode.KEYWORD
-    if mode.lower() in ("semantic", "hybrid"):
-        search_mode = SearchMode(mode.lower())
+    clean_mode = mode.lower().strip()
+    if clean_mode == "semantic":
+        search_mode = SearchMode.SEMANTIC
+    elif clean_mode == "hybrid":
+        search_mode = SearchMode.HYBRID
+    else:
+        search_mode = SearchMode.KEYWORD
 
     results = service.search(
         query=q,
@@ -41,6 +45,6 @@ def search_files(
     return SearchResponse(
         query=q,
         total=len(results),
-        mode="keyword" if search_mode == SearchMode.KEYWORD else f"{search_mode.value} (fallback keyword in Phase 1)",
+        mode=search_mode.value,
         results=[SearchHit(**item) for item in results],
     )

@@ -58,6 +58,23 @@ const API = {
     });
   },
 
+  indexProject(projectId, forceRebuild = false) {
+    return this.request(`/api/projects/${projectId}/index`, {
+      method: 'POST',
+      body: JSON.stringify({ force_rebuild: forceRebuild }),
+    });
+  },
+
+  getIndexStatus(projectId) {
+    return this.request(`/api/projects/${projectId}/index/status`);
+  },
+
+  rebuildIndex(projectId) {
+    return this.request(`/api/projects/${projectId}/index/rebuild`, {
+      method: 'POST',
+    });
+  },
+
   deleteProject(projectId) {
     return this.request(`/api/projects/${projectId}`, {
       method: 'DELETE',

@@ -65,12 +65,45 @@ CREATE VIRTUAL TABLE IF NOT EXISTS fts_files USING fts5(
     tokenize='porter unicode61'
 );
 
--- 5. Standard Indexes for High Performance
+-- 5. Semantic Chunks Table (Phase 2)
+CREATE TABLE IF NOT EXISTS chunks (
+    id TEXT PRIMARY KEY,
+    vector_id INTEGER UNIQUE NOT NULL,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    file_id TEXT NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+    chunk_index INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    char_count INTEGER NOT NULL DEFAULT 0,
+    word_count INTEGER NOT NULL DEFAULT 0,
+    content_type TEXT NOT NULL DEFAULT 'document',
+    metadata_json TEXT,
+    sha256 TEXT,
+    created_at TEXT NOT NULL
+);
+
+-- 6. Project Vector Index Tracking (Phase 2)
+CREATE TABLE IF NOT EXISTS project_indexes (
+    project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'not_indexed',
+    model_name TEXT,
+    dimension INTEGER,
+    total_chunks INTEGER NOT NULL DEFAULT 0,
+    total_vectors INTEGER NOT NULL DEFAULT 0,
+    last_indexed_at TEXT,
+    error_message TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+-- 7. Standard Indexes for High Performance
 CREATE INDEX IF NOT EXISTS idx_files_project_id ON files(project_id);
 CREATE INDEX IF NOT EXISTS idx_files_category ON files(category);
 CREATE INDEX IF NOT EXISTS idx_files_extension ON files(extension);
 CREATE INDEX IF NOT EXISTS idx_files_modified ON files(modified_time);
 CREATE INDEX IF NOT EXISTS idx_extractions_project ON file_extractions(project_id);
+CREATE INDEX IF NOT EXISTS idx_chunks_project_id ON chunks(project_id);
+CREATE INDEX IF NOT EXISTS idx_chunks_file_id ON chunks(file_id);
+CREATE INDEX IF NOT EXISTS idx_chunks_vector_id ON chunks(vector_id);
 """
 
 

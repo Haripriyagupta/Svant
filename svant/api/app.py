@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from svant import __version__, __app_name__
-from svant.api.routes import health, projects, files, search, stats
+from svant.api.routes import health, projects, files, search, stats, indexing
 from svant.config import settings
 from svant.logger import get_logger
 
@@ -54,6 +54,7 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     app.include_router(projects.router)
     app.include_router(files.router)
+    app.include_router(indexing.router)
     app.include_router(search.router)
     app.include_router(stats.router)
 

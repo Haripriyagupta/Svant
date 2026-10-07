@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 class HealthResponse(BaseModel):
     status: str = "ok"
     app: str = "SVANT"
-    version: str = "0.1.0"
+    version: str = "0.2.0"
     database: str
     data_dir: str
 
@@ -69,6 +69,9 @@ class SearchHit(BaseModel):
     category: str
     size_bytes: int
     modified_time: str
+    chunk_id: Optional[str] = None
+    match_mode: str = "keyword"
+    metadata: Optional[Dict[str, Any]] = None
 
 
 class SearchResponse(BaseModel):
@@ -83,6 +86,7 @@ class DashboardStatsResponse(BaseModel):
     total_files: int
     total_size_bytes: int
     total_indexed_files: int
+    total_chunks: int = 0
     last_scanned_at: Optional[str] = None
     categories: Dict[str, Any]
     database_status: str
@@ -96,3 +100,31 @@ class ScanResultResponse(BaseModel):
     total_size_bytes: int
     indexed_count: int
     duration_seconds: float
+
+
+class IndexProjectRequest(BaseModel):
+    force_rebuild: bool = False
+
+
+class IndexResultResponse(BaseModel):
+    status: str
+    message: str
+    project_id: str
+    total_files: int
+    indexed_files: int
+    skipped_files: int
+    failed_files: int
+    total_chunks: int
+    total_vectors: int
+    duration_seconds: float
+
+
+class IndexStatusResponse(BaseModel):
+    project_id: str
+    status: str
+    model_name: Optional[str] = None
+    dimension: Optional[int] = None
+    total_chunks: int = 0
+    total_vectors: int = 0
+    last_indexed_at: Optional[str] = None
+    error_message: Optional[str] = None

@@ -18,7 +18,7 @@
           <span class="logo-glyph">◈</span>
           <span class="brand-name">SVANT</span>
         </div>
-        <span class="brand-tag">v0.1.0 // FOUNDATION</span>
+        <span class="brand-tag">v0.2.0 // LOCAL INTELLIGENCE</span>
       </div>
 
       <nav class="nav-menu">
@@ -40,7 +40,7 @@
         <button class="nav-item" data-page="search">
           <svg class="icon" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
           <span>Search</span>
-          <span class="tag-live">FTS5</span>
+          <span class="tag-live">HYBRID</span>
         </button>
 
         <div class="nav-section-label">ROADMAP EXPANSION</div>
@@ -126,7 +126,7 @@
                 <span class="metric-icon">🔍</span>
               </div>
               <div class="metric-value" id="stat-indexed">0</div>
-              <div class="metric-meta">SQLite FTS5 Full-Text</div>
+              <div class="metric-meta">FTS5 Full-Text + FAISS Vectors</div>
             </div>
 
             <div class="metric-card">
@@ -230,10 +230,10 @@
             </div>
 
             <div class="search-controls">
-              <div class="search-mode-tabs">
+              <div class="search-mode-tabs" id="search-mode-tabs">
                 <button class="mode-tab active" data-mode="keyword">Keyword (FTS5)</button>
-                <button class="mode-tab disabled" title="Coming in Phase 2">Semantic Search <span class="tab-pill">Phase 2</span></button>
-                <button class="mode-tab disabled" title="Coming in Phase 2">Hybrid Search <span class="tab-pill">Phase 2</span></button>
+                <button class="mode-tab" data-mode="semantic">Semantic (FAISS)</button>
+                <button class="mode-tab" data-mode="hybrid">Hybrid (FTS5 + FAISS)</button>
               </div>
 
               <div class="search-project-filter">

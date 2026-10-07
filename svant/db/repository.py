@@ -6,6 +6,7 @@ Implements data access for projects, files, text extractions, and FTS5 search.
 from __future__ import annotations
 
 import datetime
+import json
 import sqlite3
 import uuid
 from typing import Any, Dict, List, Optional, Set
@@ -467,12 +468,248 @@ class Repository:
             ).fetchall()
             categories = {row["category"]: {"count": row["cnt"], "size": row["sz"]} for row in cat_rows}
 
+            total_chunks = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+
             return {
                 "total_projects": proj_count,
                 "total_files": file_count,
                 "total_size_bytes": total_size,
                 "total_indexed_files": indexed_count,
+                "total_chunks": total_chunks,
                 "last_scanned_at": last_scan,
                 "categories": categories,
                 "database_status": "connected",
             }
+
+    # =========================================================================
+    # PHASE 2: CHUNKS & VECTOR MAPPINGS
+    # =========================================================================
+
+    def insert_chunks(self, chunks_data: List[Dict[str, Any]]) -> List[int]:
+        """
+        Store a batch of text chunks, allocating unique 64-bit vector IDs.
+        Returns the list of allocated vector IDs.
+        """
+        if not chunks_data:
+            return []
+
+        now = _now_iso()
+        with self.db.session() as conn:
+            cur = conn.execute("SELECT COALESCE(MAX(vector_id), 0) FROM chunks")
+            max_id = cur.fetchone()[0]
+            start_id = max_id + 1
+
+            assigned_vector_ids: List[int] = []
+            rows_to_insert = []
+
+            for idx, c in enumerate(chunks_data):
+                vid = start_id + idx
+                assigned_vector_ids.append(vid)
+                meta_json = json.dumps(c.get("metadata", {}))
+                rows_to_insert.append((
+                    c.get("id") or str(uuid.uuid4()),
+                    vid,
+                    c["project_id"],
+                    c["file_id"],
+                    c.get("chunk_index", 0),
+                    c["text"],
+                    c.get("char_count", len(c["text"])),
+                    c.get("word_count", len(c["text"].split())),
+                    c.get("content_type", "document"),
+                    meta_json,
+                    c.get("sha256"),
+                    now,
+                ))
+
+            conn.executemany(
+                """
+                INSERT INTO chunks (
+                    id, vector_id, project_id, file_id, chunk_index,
+                    text, char_count, word_count, content_type,
+                    metadata_json, sha256, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                rows_to_insert,
+            )
+
+            return assigned_vector_ids
+
+    def get_chunks_by_file(self, file_id: str) -> List[Dict[str, Any]]:
+        """Retrieve all chunks for a specific file ordered by chunk index."""
+        with self.db.session() as conn:
+            cursor = conn.execute(
+                "SELECT * FROM chunks WHERE file_id = ? ORDER BY chunk_index ASC",
+                (file_id,),
+            )
+            return [dict(row) for row in cursor.fetchall()]
+
+    def get_chunks_by_project(self, project_id: str) -> List[Dict[str, Any]]:
+        """Retrieve all chunks for a project."""
+        with self.db.session() as conn:
+            cursor = conn.execute(
+                "SELECT * FROM chunks WHERE project_id = ? ORDER BY file_id, chunk_index ASC",
+                (project_id,),
+            )
+            return [dict(row) for row in cursor.fetchall()]
+
+    def count_chunks_by_project(self, project_id: str) -> int:
+        """Count total chunks for a project."""
+        with self.db.session() as conn:
+            cursor = conn.execute("SELECT COUNT(*) FROM chunks WHERE project_id = ?", (project_id,))
+            return cursor.fetchone()[0]
+
+    def delete_chunks_by_file(self, file_id: str) -> List[int]:
+        """
+        Delete all chunks for a file, returning the deleted vector IDs so FAISS can drop them.
+        """
+        with self.db.session() as conn:
+            cursor = conn.execute("SELECT vector_id FROM chunks WHERE file_id = ?", (file_id,))
+            vector_ids = [row[0] for row in cursor.fetchall()]
+            if vector_ids:
+                conn.execute("DELETE FROM chunks WHERE file_id = ?", (file_id,))
+            return vector_ids
+
+    def delete_chunks_by_project(self, project_id: str) -> List[int]:
+        """
+        Delete all chunks for a project, returning the deleted vector IDs.
+        """
+        with self.db.session() as conn:
+            cursor = conn.execute("SELECT vector_id FROM chunks WHERE project_id = ?", (project_id,))
+            vector_ids = [row[0] for row in cursor.fetchall()]
+            if vector_ids:
+                conn.execute("DELETE FROM chunks WHERE project_id = ?", (project_id,))
+            return vector_ids
+
+    def get_chunks_by_vector_ids(self, vector_ids: List[int]) -> List[Dict[str, Any]]:
+        """
+        Lookup chunk metadata, file path, and project name by vector IDs.
+        Preserves ordering requested or returns indexed map.
+        """
+        if not vector_ids:
+            return []
+
+        placeholders = ",".join("?" for _ in vector_ids)
+        sql = f"""
+            SELECT
+                c.id AS chunk_id,
+                c.vector_id,
+                c.project_id,
+                c.file_id,
+                c.chunk_index,
+                c.text,
+                c.char_count,
+                c.word_count,
+                c.content_type,
+                c.metadata_json,
+                f.path,
+                f.relative_path,
+                f.filename,
+                f.category,
+                f.size_bytes,
+                f.modified_time,
+                p.name AS project_name
+            FROM chunks c
+            JOIN files f ON c.file_id = f.id
+            JOIN projects p ON c.project_id = p.id
+            WHERE c.vector_id IN ({placeholders})
+        """
+
+        with self.db.session() as conn:
+            cursor = conn.execute(sql, vector_ids)
+            rows = cursor.fetchall()
+
+            # Map by vector_id to preserve the caller's score-ordered sequence
+            by_id = {row["vector_id"]: dict(row) for row in rows}
+            ordered_results = []
+            for vid in vector_ids:
+                if vid in by_id:
+                    item = by_id[vid]
+                    if item.get("metadata_json"):
+                        try:
+                            item["metadata"] = json.loads(item["metadata_json"])
+                        except Exception:
+                            item["metadata"] = {}
+                    else:
+                        item["metadata"] = {}
+                    ordered_results.append(item)
+            return ordered_results
+
+    # =========================================================================
+    # PHASE 2: PROJECT INDEX STATUS
+    # =========================================================================
+
+    def get_project_index_status(self, project_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve vector index state for a project."""
+        with self.db.session() as conn:
+            cursor = conn.execute("SELECT * FROM project_indexes WHERE project_id = ?", (project_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def upsert_project_index_status(
+        self,
+        project_id: str,
+        status: str,
+        model_name: Optional[str] = None,
+        dimension: Optional[int] = None,
+        total_chunks: Optional[int] = None,
+        total_vectors: Optional[int] = None,
+        last_indexed_at: Optional[str] = None,
+        error_message: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Update or create the vector index state record for a project."""
+        now = _now_iso()
+        existing = self.get_project_index_status(project_id)
+
+        with self.db.session() as conn:
+            if existing:
+                fields: List[str] = ["status = ?", "updated_at = ?"]
+                params: List[Any] = [status, now]
+
+                if model_name is not None:
+                    fields.append("model_name = ?")
+                    params.append(model_name)
+                if dimension is not None:
+                    fields.append("dimension = ?")
+                    params.append(dimension)
+                if total_chunks is not None:
+                    fields.append("total_chunks = ?")
+                    params.append(total_chunks)
+                if total_vectors is not None:
+                    fields.append("total_vectors = ?")
+                    params.append(total_vectors)
+                if last_indexed_at is not None:
+                    fields.append("last_indexed_at = ?")
+                    params.append(last_indexed_at)
+                if error_message is not None:
+                    fields.append("error_message = ?")
+                    params.append(error_message)
+                elif status == "indexed":
+                    fields.append("error_message = NULL")
+
+                params.append(project_id)
+                conn.execute(f"UPDATE project_indexes SET {', '.join(fields)} WHERE project_id = ?", params)
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO project_indexes (
+                        project_id, status, model_name, dimension,
+                        total_chunks, total_vectors, last_indexed_at,
+                        error_message, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        project_id,
+                        status,
+                        model_name or "",
+                        dimension or 0,
+                        total_chunks or 0,
+                        total_vectors or 0,
+                        last_indexed_at,
+                        error_message,
+                        now,
+                        now,
+                    ),
+                )
+
+        return self.get_project_index_status(project_id) or {}
+

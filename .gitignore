@@ -11,3 +11,13 @@ build/
 .DS_Store
 .vscode/
 .idea/
+
+# Local Data, Databases & Indexes
+data/
+*.db
+*.db-wal
+*.db-shm
+*.index
+*.faiss
+models/
+indexes/

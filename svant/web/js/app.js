@@ -12,6 +12,8 @@ document.addEventListener('DOMContentLoaded', () => {
     files: [],
     selectedProjectForFiles: '',
     selectedCategoryForFiles: '',
+    searchMode: 'keyword',
+    projectStatuses: {},
   };
 
   // DOM Elements
@@ -135,7 +137,7 @@ document.addEventListener('DOMContentLoaded', () => {
       document.getElementById('stat-projects').textContent = stats.total_projects;
       document.getElementById('stat-files').textContent = stats.total_files.toLocaleString();
       document.getElementById('stat-files-size').textContent = `${formatBytes(stats.total_size_bytes)} Total Storage`;
-      document.getElementById('stat-indexed').textContent = stats.total_indexed_files.toLocaleString();
+      document.getElementById('stat-indexed').textContent = `${stats.total_indexed_files.toLocaleString()} (${stats.total_chunks || 0} chunks)`;
       document.getElementById('stat-last-scan').textContent = stats.last_scanned_at
         ? `Last scan: ${formatDate(stats.last_scanned_at)}`
         : 'No scans completed';
@@ -204,6 +206,18 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       const projects = await API.getProjects();
       state.projects = projects;
+
+      // Fetch index status for all projects
+      const statuses = await Promise.all(
+        projects.map((p) =>
+          API.getIndexStatus(p.id).catch(() => ({ status: 'not_indexed', total_chunks: 0, total_vectors: 0 }))
+        )
+      );
+      state.projectStatuses = {};
+      projects.forEach((p, idx) => {
+        state.projectStatuses[p.id] = statuses[idx];
+      });
+
       renderProjectsGrid(projects);
       updateProjectFilterDropdowns(projects);
     } catch (err) {
@@ -219,15 +233,26 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     grid.innerHTML = projects
-      .map(
-        (p) => `
+      .map((p) => {
+        const idxInfo = state.projectStatuses[p.id] || { status: 'not_indexed', total_chunks: 0, total_vectors: 0 };
+        const idxLabel = idxInfo.status === 'indexed'
+          ? `Indexed (${idxInfo.total_chunks} chunks)`
+          : idxInfo.status === 'indexing'
+          ? 'Indexing...'
+          : 'Not Indexed';
+        const idxClass = idxInfo.status === 'indexed' ? 'document' : idxInfo.status === 'indexing' ? 'source' : 'binary';
+
+        return `
       <div class="project-card">
         <div class="project-card-header">
           <div>
             <div class="project-title">${escapeHtml(p.name)}</div>
             <div class="project-path" title="${escapeHtml(p.root_path)}">${escapeHtml(p.root_path)}</div>
           </div>
-          <span class="tag-cat ${p.status === 'ready' ? 'document' : 'binary'}">${p.status}</span>
+          <div style="display: flex; gap: 6px; align-items: center;">
+            <span class="tag-cat ${p.status === 'ready' ? 'document' : 'binary'}">${p.status}</span>
+            <span class="tag-cat ${idxClass}" title="Semantic Vector Index Status">${idxLabel}</span>
+          </div>
         </div>
 
         <div class="project-stats-row">
@@ -240,19 +265,25 @@ document.addEventListener('DOMContentLoaded', () => {
             <span class="proj-stat-val">${formatBytes(p.total_size_bytes)}</span>
           </div>
           <div class="proj-stat-item">
+            <span class="proj-stat-label">Vectors</span>
+            <span class="proj-stat-val">${(idxInfo.total_vectors || 0).toLocaleString()}</span>
+          </div>
+          <div class="proj-stat-item">
             <span class="proj-stat-label">Last Scan</span>
             <span class="proj-stat-val" style="font-size: 11.5px;">${formatDate(p.last_scanned_at)}</span>
           </div>
         </div>
 
         <div class="project-actions">
-          <button class="btn btn-secondary btn-sm" onclick="window.viewProjectFiles('${p.id}')">Explore Files</button>
-          <button class="btn btn-primary btn-sm" onclick="window.triggerScan('${p.id}')">Scan & Index</button>
+          <button class="btn btn-secondary btn-sm" onclick="window.viewProjectFiles('${p.id}')">Files</button>
+          <button class="btn btn-secondary btn-sm" onclick="window.triggerScan('${p.id}')" title="Scan disk and extract text">Scan</button>
+          <button class="btn btn-primary btn-sm" onclick="window.triggerIndex('${p.id}')" title="Chunk and embed text for semantic search">Index</button>
+          <button class="btn btn-ghost btn-sm" onclick="window.triggerReindex('${p.id}')" title="Force rebuild FAISS vector index">Re-index</button>
           <button class="btn btn-danger btn-sm" onclick="window.confirmUntrack('${p.id}', '${escapeJs(p.name)}')">Untrack</button>
         </div>
       </div>
-    `
-      )
+    `;
+      })
       .join('');
   }
 
@@ -280,6 +311,39 @@ document.addEventListener('DOMContentLoaded', () => {
       if (state.currentPage === 'files') loadFilesView();
     } catch (err) {
       showToast(`Scan failed: ${err.message}`, 'error');
+    }
+  };
+
+  // Index Action (Phase 2 Local Intelligence)
+  window.triggerIndex = async function (projectId) {
+    showToast('Starting semantic indexing (chunking & embeddings)...', 'info');
+    try {
+      const res = await API.indexProject(projectId);
+      showToast(
+        `Indexing complete: ${res.indexed_files} indexed (${res.total_chunks} chunks, ${res.total_vectors} vectors) in ${res.duration_seconds}s`,
+        'success'
+      );
+      loadDashboardData();
+      if (state.currentPage === 'projects') loadProjectsView();
+    } catch (err) {
+      showToast(`Indexing failed: ${err.message}`, 'error');
+    }
+  };
+
+  // Re-index Action (Force rebuild)
+  window.triggerReindex = async function (projectId) {
+    if (!confirm('Rebuilding the index will wipe current vectors and re-chunk/re-embed all files from scratch. Proceed?')) return;
+    showToast('Force rebuilding vector index...', 'info');
+    try {
+      const res = await API.rebuildIndex(projectId);
+      showToast(
+        `Index rebuilt: ${res.total_chunks} chunks and ${res.total_vectors} vectors in ${res.duration_seconds}s`,
+        'success'
+      );
+      loadDashboardData();
+      if (state.currentPage === 'projects') loadProjectsView();
+    } catch (err) {
+      showToast(`Rebuild failed: ${err.message}`, 'error');
     }
   };
 
@@ -370,7 +434,30 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
-  // Search View
+  // Search View & Mode Switching
+  state.searchMode = 'keyword';
+  const modeTabs = document.querySelectorAll('.mode-tab');
+  modeTabs.forEach((tab) => {
+    tab.addEventListener('click', () => {
+      modeTabs.forEach((t) => t.classList.remove('active'));
+      tab.classList.add('active');
+      state.searchMode = tab.dataset.mode || 'keyword';
+
+      const qInput = document.getElementById('search-query-input');
+      if (state.searchMode === 'semantic') {
+        qInput.placeholder = 'Natural language semantic search (FAISS dense vector embeddings)...';
+      } else if (state.searchMode === 'hybrid') {
+        qInput.placeholder = 'Hybrid search combining full-text keywords and semantic vector relevance...';
+      } else {
+        qInput.placeholder = 'Search exact keywords (SQLite FTS5 full-text engine)...';
+      }
+
+      if (qInput.value.trim()) {
+        runSearch();
+      }
+    });
+  });
+
   async function runSearch() {
     const queryInput = document.getElementById('search-query-input');
     const projectSelect = document.getElementById('search-project-select');
@@ -382,12 +469,20 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    container.innerHTML = `<div class="search-initial-state"><div class="hint-icon">⚡</div><h3>Searching FTS5 Index...</h3></div>`;
+    const currentMode = state.searchMode || 'keyword';
+    const modeLabels = {
+      keyword: 'SQLite FTS5 BM25',
+      semantic: 'FAISS Dense Vectors',
+      hybrid: 'FTS5 + FAISS Hybrid Fusion',
+    };
+
+    container.innerHTML = `<div class="search-initial-state"><div class="hint-icon">⚡</div><h3>Searching ${modeLabels[currentMode]}...</h3></div>`;
 
     try {
       const res = await API.search({
         query: query,
         projectId: projectSelect.value || undefined,
+        mode: currentMode,
       });
 
       if (res.results.length === 0) {
@@ -395,7 +490,7 @@ document.addEventListener('DOMContentLoaded', () => {
           <div class="search-initial-state">
             <div class="hint-icon">∅</div>
             <h3>No matches found</h3>
-            <p>No indexed files matched query: "<strong>${escapeHtml(query)}</strong>"</p>
+            <p>No indexed files matched query: "<strong>${escapeHtml(query)}</strong>" in ${currentMode.toUpperCase()} mode.</p>
           </div>
         `;
         return;
@@ -403,21 +498,29 @@ document.addEventListener('DOMContentLoaded', () => {
 
       container.innerHTML = `
         <div style="font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); margin-bottom: 8px;">
-          Found ${res.total} matches across indexed files (SQLite FTS5 BM25)
+          Found ${res.total} matches across indexed files (${res.mode.toUpperCase()} · ${modeLabels[currentMode] || currentMode})
         </div>
         ${res.results
-          .map(
-            (hit) => `
+          .map((hit) => {
+            const modeBadgeClass = hit.match_mode && hit.match_mode.includes('semantic')
+              ? 'source'
+              : (hit.match_mode && hit.match_mode.includes('hybrid') ? 'data' : 'document');
+            const scoreLabel = hit.score !== undefined ? ` · Score ${hit.score}` : '';
+
+            return `
           <div class="search-hit-card" onclick="window.viewFileDetail('${hit.file_id}')">
             <div class="search-hit-header">
               <span class="search-hit-title">${escapeHtml(hit.filename)}</span>
-              <span class="search-hit-proj">${escapeHtml(hit.project_name)} · Rank ${hit.score}</span>
+              <div style="display: flex; gap: 8px; align-items: center;">
+                <span class="tag-cat ${modeBadgeClass}">${escapeHtml((hit.match_mode || currentMode).toUpperCase())}${scoreLabel}</span>
+                <span class="search-hit-proj">${escapeHtml(hit.project_name)}</span>
+              </div>
             </div>
             <div class="search-hit-path">${escapeHtml(hit.relative_path)}</div>
             <div class="search-snippet">${hit.snippet}</div>
           </div>
-        `
-          )
+        `;
+          })
           .join('')}
       `;
     } catch (err) {
