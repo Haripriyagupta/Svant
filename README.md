@@ -1,5 +1,5 @@
 # SVANT
-
+<!--
 > **Local-First Project & File Intelligence Desktop Application**  
 > *Phase 2 — Local Intelligence Foundation*
 
