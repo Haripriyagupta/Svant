@@ -1,8 +1,25 @@
 # SVANT
+just trying my things out. Will update it soon with proper description, setup guide, how it works and how to efficiently use it.
+
+
+ Overview & Purpose
+
+Modern software projects and documentation are scattered across disks, nested directories, and distinct formats (code, documentation, configuration, notes). Developers spend substantial time finding where specific logic, configuration keys, or architectural guidelines reside.
+
+SVANT delivers local intelligence directly on your machine:
+- Indexes local projects directly on your machine without modifying original files.
+- Extracts text across code, documentation, and configuration files.
+- Provides sub-millisecond keyword search via SQLite FTS5 with BM25 relevance ranking.
+- Generates CPU-friendly dense vector embeddings locally and indexes them with FAISS.
+- Enables natural language **Semantic Search** and score-normalized **Hybrid Search** (FTS5 + FAISS).
+- Powers **Grounded AI Chat (RAG)** strictly backed by retrieved local project evidence with honest citations.
+- Enforces **Local Secret Redaction** so API keys, passwords, private keys, and tokens are NEVER sent to cloud LLMs.
+- Runs in **Local-Only Mode** 100% offline without Ollama, PyTorch, CUDA, or required cloud services.
 <!--
 > **Local-First Project & File Intelligence Desktop Application**  
 > *Phase 3 — Grounded AI Chat & Privacy-Aware RAG Engine*
 -->
+<!--
 
 SVANT is a high-performance, privacy-respecting, local-first intelligence application designed to help developers comprehend, search, inspect, and maintain their local codebases and documents without cloud dependencies or GPU hardware.
 
