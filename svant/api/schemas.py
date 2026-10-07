@@ -128,3 +128,40 @@ class IndexStatusResponse(BaseModel):
     total_vectors: int = 0
     last_indexed_at: Optional[str] = None
     error_message: Optional[str] = None
+
+
+class CitationItem(BaseModel):
+    file_id: str
+    filename: str
+    relative_path: str
+    location: str
+    relevance_score: float
+    snippet_preview: str
+    chunk_id: Optional[str] = None
+
+
+class ChatRequest(BaseModel):
+    project_id: str = Field(..., description="Project ID to query")
+    message: str = Field(..., min_length=1, description="User question or prompt")
+    search_mode: str = Field("hybrid", description="Retrieval mode: hybrid, semantic, keyword")
+    top_k: Optional[int] = Field(None, ge=1, le=25, description="Number of context items to retrieve")
+    provider: Optional[str] = Field(None, description="Optional provider override: local, gemini, mock")
+
+
+class ChatResponse(BaseModel):
+    answer: str
+    provider: str
+    mode: str
+    sources: List[CitationItem]
+    context_count: int
+    redactions: int
+
+
+class AIStatusResponse(BaseModel):
+    local_only_mode: bool
+    active_provider: str
+    gemini_configured: bool
+    gemini_model: str
+    is_available: bool = True
+
+

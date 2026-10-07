@@ -73,7 +73,7 @@ document.addEventListener('DOMContentLoaded', () => {
     security: { title: 'Secret Detection', subtitle: 'Static secret scanning and leak prevention (Roadmap Phase 4)' },
     duplicates: { title: 'Duplicate Analysis', subtitle: 'Identify redundant and identical files (Roadmap Phase 5)' },
     health: { title: 'Project Health', subtitle: 'Codebase architecture metrics and hygiene scoring (Roadmap Phase 5)' },
-    aichat: { title: 'AI Assistant', subtitle: 'Grounded project Q&A with Gemini and local models (Roadmap Phase 6)' },
+    aichat: { title: 'Grounded AI Assistant', subtitle: 'Privacy-aware project Q&A with strict context grounding & citations' },
     settings: { title: 'Preferences', subtitle: 'Configuration and storage path settings (Roadmap Phase 7)' },
   };
 
@@ -96,6 +96,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (pageId === 'dashboard') loadDashboardData();
     if (pageId === 'projects') loadProjectsView();
     if (pageId === 'files') loadFilesView();
+    if (pageId === 'aichat') {
+      updateAIStatusBadge();
+      if (!state.projects.length) loadDashboardData();
+    }
   }
 
   navItems.forEach((btn) => {
@@ -242,6 +246,8 @@ document.addEventListener('DOMContentLoaded', () => {
           : 'Not Indexed';
         const idxClass = idxInfo.status === 'indexed' ? 'document' : idxInfo.status === 'indexing' ? 'source' : 'binary';
 
+        const isIndexing = idxInfo.status === 'indexing';
+
         return `
       <div class="project-card">
         <div class="project-card-header">
@@ -277,8 +283,8 @@ document.addEventListener('DOMContentLoaded', () => {
         <div class="project-actions">
           <button class="btn btn-secondary btn-sm" onclick="window.viewProjectFiles('${p.id}')">Files</button>
           <button class="btn btn-secondary btn-sm" onclick="window.triggerScan('${p.id}')" title="Scan disk and extract text">Scan</button>
-          <button class="btn btn-primary btn-sm" onclick="window.triggerIndex('${p.id}')" title="Chunk and embed text for semantic search">Index</button>
-          <button class="btn btn-ghost btn-sm" onclick="window.triggerReindex('${p.id}')" title="Force rebuild FAISS vector index">Re-index</button>
+          <button class="btn btn-primary btn-sm" onclick="window.triggerIndex('${p.id}')" ${isIndexing ? 'disabled' : ''} title="Chunk and embed text for semantic search">${isIndexing ? 'Indexing...' : 'Index'}</button>
+          <button class="btn btn-ghost btn-sm" onclick="window.triggerReindex('${p.id}')" ${isIndexing ? 'disabled' : ''} title="Force rebuild FAISS vector index">Re-index</button>
           <button class="btn btn-danger btn-sm" onclick="window.confirmUntrack('${p.id}', '${escapeJs(p.name)}')">Untrack</button>
         </div>
       </div>
@@ -290,6 +296,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function updateProjectFilterDropdowns(projects) {
     const fileSelect = document.getElementById('file-filter-project');
     const searchSelect = document.getElementById('search-project-select');
+    const chatSelect = document.getElementById('chat-project-select');
 
     const options = [
       '<option value="">All Projects</option>',
@@ -298,6 +305,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (fileSelect) fileSelect.innerHTML = options;
     if (searchSelect) searchSelect.innerHTML = ['<option value="">Across All Tracked Projects</option>', ...projects.map((p) => `<option value="${p.id}">${escapeHtml(p.name)}</option>`)].join('');
+    if (chatSelect) chatSelect.innerHTML = ['<option value="">All Indexed Projects</option>', ...projects.map((p) => `<option value="${p.id}">${escapeHtml(p.name)}</option>`)].join('');
   }
 
   // Scan Action
@@ -316,6 +324,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Index Action (Phase 2 Local Intelligence)
   window.triggerIndex = async function (projectId) {
+    if (state.projectStatuses[projectId]?.status === 'indexing') {
+      showToast('Indexing is already in progress for this project.', 'warning');
+      return;
+    }
+    state.projectStatuses[projectId] = {
+      ...(state.projectStatuses[projectId] || {}),
+      status: 'indexing',
+    };
+    if (state.currentPage === 'projects') renderProjectsGrid(state.projects);
+
     showToast('Starting semantic indexing (chunking & embeddings)...', 'info');
     try {
       const res = await API.indexProject(projectId);
@@ -323,16 +341,27 @@ document.addEventListener('DOMContentLoaded', () => {
         `Indexing complete: ${res.indexed_files} indexed (${res.total_chunks} chunks, ${res.total_vectors} vectors) in ${res.duration_seconds}s`,
         'success'
       );
-      loadDashboardData();
-      if (state.currentPage === 'projects') loadProjectsView();
     } catch (err) {
       showToast(`Indexing failed: ${err.message}`, 'error');
+    } finally {
+      loadDashboardData();
+      if (state.currentPage === 'projects') loadProjectsView();
     }
   };
 
   // Re-index Action (Force rebuild)
   window.triggerReindex = async function (projectId) {
+    if (state.projectStatuses[projectId]?.status === 'indexing') {
+      showToast('Indexing is already in progress for this project.', 'warning');
+      return;
+    }
     if (!confirm('Rebuilding the index will wipe current vectors and re-chunk/re-embed all files from scratch. Proceed?')) return;
+    state.projectStatuses[projectId] = {
+      ...(state.projectStatuses[projectId] || {}),
+      status: 'indexing',
+    };
+    if (state.currentPage === 'projects') renderProjectsGrid(state.projects);
+
     showToast('Force rebuilding vector index...', 'info');
     try {
       const res = await API.rebuildIndex(projectId);
@@ -340,10 +369,11 @@ document.addEventListener('DOMContentLoaded', () => {
         `Index rebuilt: ${res.total_chunks} chunks and ${res.total_vectors} vectors in ${res.duration_seconds}s`,
         'success'
       );
-      loadDashboardData();
-      if (state.currentPage === 'projects') loadProjectsView();
     } catch (err) {
       showToast(`Rebuild failed: ${err.message}`, 'error');
+    } finally {
+      loadDashboardData();
+      if (state.currentPage === 'projects') loadProjectsView();
     }
   };
 
@@ -619,8 +649,225 @@ document.addEventListener('DOMContentLoaded', () => {
     return str.replace(/'/g, "\\'").replace(/"/g, '\\"');
   }
 
+  // ==========================================================================
+  // Grounded AI Chat Logic (Phase 3)
+  // ==========================================================================
+
+  async function updateAIStatusBadge() {
+    const badge = document.getElementById('chat-provider-badge');
+    if (!badge) return;
+    try {
+      const status = await API.getAIStatus();
+      if (status.active_provider === 'gemini') {
+        badge.textContent = `Gemini (${status.model})`;
+        badge.className = 'badge-provider live';
+      } else if (status.active_provider === 'mock') {
+        badge.textContent = 'Mock AI (Local Test)';
+        badge.className = 'badge-provider test';
+      } else if (status.local_only_mode) {
+        badge.textContent = 'Local-Only Mode';
+        badge.className = 'badge-provider local';
+      } else {
+        badge.textContent = `${(status.active_provider || 'AI').toUpperCase()} (${status.is_available ? 'Ready' : 'Offline'})`;
+        badge.className = 'badge-provider';
+      }
+    } catch (_) {
+      badge.textContent = 'AI Status Unknown';
+      badge.className = 'badge-provider';
+    }
+  }
+
+  function formatAIAnswer(rawText) {
+    if (!rawText) return '';
+    let formatted = escapeHtml(rawText);
+    // Code blocks: ```code```
+    formatted = formatted.replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>');
+    // Inline code: `code`
+    formatted = formatted.replace(/`([^`]+)`/g, '<code>$1</code>');
+    // Bold: **text**
+    formatted = formatted.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    return formatted;
+  }
+
+  async function sendChatMessage() {
+    const input = document.getElementById('chat-input');
+    const sendBtn = document.getElementById('btn-chat-send');
+    const stream = document.getElementById('chat-stream');
+    const projSelect = document.getElementById('chat-project-select');
+    const modeSelect = document.getElementById('chat-mode-select');
+    const topkSelect = document.getElementById('chat-topk-select');
+
+    const text = input.value.trim();
+    if (!text) return;
+
+    // Remove welcome card if still visible
+    const welcomeCard = document.getElementById('chat-welcome');
+    if (welcomeCard) welcomeCard.remove();
+
+    // Disable controls while awaiting RAG generation
+    input.disabled = true;
+    sendBtn.disabled = true;
+
+    // Append User Bubble
+    const userRow = document.createElement('div');
+    userRow.className = 'chat-message-row user';
+    userRow.innerHTML = `
+      <div class="chat-bubble">
+        <div>${escapeHtml(text)}</div>
+      </div>
+    `;
+    stream.appendChild(userRow);
+    stream.scrollTop = stream.scrollHeight;
+
+    // Append Typing Indicator
+    const typingRow = document.createElement('div');
+    typingRow.className = 'chat-message-row assistant';
+    typingRow.id = 'chat-typing-row';
+    typingRow.innerHTML = `
+      <div class="chat-bubble">
+        <div class="typing-dots">
+          <span class="typing-dot"></span>
+          <span class="typing-dot"></span>
+          <span class="typing-dot"></span>
+        </div>
+      </div>
+    `;
+    stream.appendChild(typingRow);
+    stream.scrollTop = stream.scrollHeight;
+
+    try {
+      const res = await API.chat({
+        message: text,
+        projectId: projSelect.value || undefined,
+        searchMode: modeSelect.value || 'hybrid',
+        topK: parseInt(topkSelect.value, 10) || 5,
+      });
+
+      typingRow.remove();
+
+      const sources = res.sources || res.citations || [];
+      const redactionCount = res.redactions !== undefined ? res.redactions : (res.redactions_count || 0);
+      const provName = res.provider || res.provider_name || 'AI';
+
+      const redactionHtml = redactionCount > 0
+        ? `<span class="redaction-indicator" title="${redactionCount} sensitive secrets (keys, passwords, tokens) were masked locally before generation">🛡️ ${redactionCount} Redacted</span>`
+        : '';
+
+      const citationsHtml = sources.length > 0
+        ? `
+        <div class="citations-box">
+          <div class="citations-header">
+            <span>Source Grounding Citations</span>
+            <span class="citations-count-badge">${sources.length} cited source${sources.length > 1 ? 's' : ''}</span>
+          </div>
+          <div class="citations-list">
+            ${sources.map((c) => {
+              const loc = c.location || (c.start_line && c.end_line ? `Lines ${c.start_line}-${c.end_line}` : `Chunk #${(c.chunk_index !== undefined ? c.chunk_index : 0)}`);
+              const scoreVal = c.relevance_score !== undefined ? c.relevance_score : c.score;
+              const scoreBadge = scoreVal !== undefined ? `<span class="citation-score">Relevance: ${scoreVal}</span>` : '';
+              const snippetText = c.snippet_preview || c.snippet || '';
+              return `
+                <div class="citation-card" onclick="window.viewFileDetail('${c.file_id}')" title="Inspect file: ${escapeHtml(c.relative_path || c.path || c.filename)}">
+                  <div class="citation-top">
+                    <div class="citation-file-info">
+                      <span class="citation-filename">📄 ${escapeHtml(c.filename)}</span>
+                      <span class="citation-location">${loc}</span>
+                    </div>
+                    ${scoreBadge}
+                  </div>
+                  <div class="citation-snippet">${escapeHtml(snippetText)}</div>
+                </div>
+              `;
+            }).join('')}
+          </div>
+        </div>
+        `
+        : '';
+
+      const assistantRow = document.createElement('div');
+      assistantRow.className = 'chat-message-row assistant';
+      assistantRow.innerHTML = `
+        <div class="chat-bubble">
+          <div class="bubble-header">
+            <span class="assistant-tag">⚡ SVANT RAG</span>
+            ${redactionHtml}
+          </div>
+          <div class="assistant-text">${formatAIAnswer(res.answer)}</div>
+          ${citationsHtml}
+          <div class="bubble-meta-footer">
+            <span>Mode: ${(res.mode || 'hybrid').toUpperCase()}</span>
+            <span>·</span>
+            <span>Context Chunks: ${res.context_count !== undefined ? res.context_count : sources.length}</span>
+            <span>·</span>
+            <span>Provider: ${escapeHtml(provName)}</span>
+            <span>·</span>
+            <span style="color: var(--emerald-primary);">✓ Grounded Context</span>
+          </div>
+        </div>
+      `;
+      stream.appendChild(assistantRow);
+      input.value = '';
+    } catch (err) {
+      typingRow.remove();
+      const errorRow = document.createElement('div');
+      errorRow.className = 'chat-message-row assistant';
+      errorRow.innerHTML = `
+        <div class="chat-bubble" style="border-color: var(--rose-primary);">
+          <div class="bubble-header">
+            <span class="assistant-tag" style="color: var(--rose-primary);">⚠️ Error</span>
+          </div>
+          <div class="assistant-text" style="color: var(--rose-primary);">${escapeHtml(err.message)}</div>
+        </div>
+      `;
+      stream.appendChild(errorRow);
+    } finally {
+      input.disabled = false;
+      sendBtn.disabled = false;
+      input.focus();
+      stream.scrollTop = stream.scrollHeight;
+    }
+  }
+
+  // Chat Event Listeners
+  const chatSendBtn = document.getElementById('btn-chat-send');
+  if (chatSendBtn) {
+    chatSendBtn.addEventListener('click', sendChatMessage);
+  }
+
+  const chatInput = document.getElementById('chat-input');
+  if (chatInput) {
+    chatInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendChatMessage();
+      }
+    });
+  }
+
+  const chatClearBtn = document.getElementById('btn-clear-chat');
+  if (chatClearBtn) {
+    chatClearBtn.addEventListener('click', () => {
+      const stream = document.getElementById('chat-stream');
+      stream.innerHTML = `
+        <div class="chat-welcome-card" id="chat-welcome">
+          <div class="welcome-glyph">✨</div>
+          <h2>Grounded Local RAG Assistant</h2>
+          <p>Ask questions about your codebase, documentation, and tracked repositories. Every answer is strictly grounded in retrieved local chunks with full source citations.</p>
+          <div class="chat-feature-pills">
+            <span class="chat-pill">🔒 Zero Secret Leakage (Local Redaction)</span>
+            <span class="chat-pill">📑 Precise Source & Line Range Citations</span>
+            <span class="chat-pill">⚡ Hybrid FTS5 + FAISS Vector Retrieval</span>
+            <span class="chat-pill">🛡️ Honest "I don't know" when context lacks facts</span>
+          </div>
+        </div>
+      `;
+      showToast('Chat history cleared', 'info');
+    });
+  }
+
   // Initial load
   checkHealth();
   loadDashboardData();
+  updateAIStatusBadge();
   setInterval(checkHealth, 15000); // 15s health heartbeat
 });

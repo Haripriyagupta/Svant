@@ -146,3 +146,125 @@ def test_force_rebuild_index(temp_env):
     assert rebuild_res.indexed_files == 1
     assert rebuild_res.skipped_files == 0
     assert rebuild_res.total_chunks >= 1
+
+
+def test_concurrent_insert_chunks_unique_vector_ids(temp_env):
+    """Verify concurrent chunk insertions allocate unique vector IDs without SQLite collision."""
+    import concurrent.futures
+    repo = temp_env["repo"]
+
+    proj = repo.create_project(name="ConcurrentProj", root_path="/test/concurrent")
+    pid = proj["id"]
+
+    # Pre-register files
+    file_ids = []
+    for i in range(10):
+        f = repo.upsert_file(
+            project_id=pid,
+            path=f"/test/concurrent/file_{i}.txt",
+            relative_path=f"file_{i}.txt",
+            filename=f"file_{i}.txt",
+            extension=".txt",
+            category="document",
+            size_bytes=100,
+            modified_time="2026-01-01T00:00:00Z",
+        )
+        file_ids.append(f["id"])
+
+    def insert_batch(file_id, batch_idx):
+        chunks = [
+            {
+                "project_id": pid,
+                "file_id": file_id,
+                "chunk_index": j,
+                "text": f"Chunk text {batch_idx}_{j}",
+                "char_count": 20,
+                "word_count": 4,
+            }
+            for j in range(5)
+        ]
+        return repo.insert_chunks(chunks)
+
+    all_assigned_vids = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        futures = [
+            executor.submit(insert_batch, file_ids[idx % len(file_ids)], idx)
+            for idx in range(20)
+        ]
+        for f in concurrent.futures.as_completed(futures):
+            all_assigned_vids.extend(f.result())
+
+    # Total 20 batches of 5 chunks = 100 chunks
+    assert len(all_assigned_vids) == 100
+    assert len(set(all_assigned_vids)) == 100, "Vector IDs must be strictly unique!"
+
+
+def test_incremental_indexing_recovers_missing_faiss_vectors(temp_env):
+    """Verify incremental indexing re-embeds when SQLite has chunks but FAISS vectors are missing."""
+    tmp_path = temp_env["tmp_path"]
+    repo = temp_env["repo"]
+    scanner = temp_env["scanner"]
+    pipeline = temp_env["pipeline"]
+
+    proj_dir = tmp_path / "proj_desync"
+    proj_dir.mkdir()
+    (proj_dir / "desync.txt").write_text("Text that needs semantic search vectors.", encoding="utf-8")
+
+    proj = repo.create_project(name="DesyncProj", root_path=str(proj_dir))
+    pid = proj["id"]
+
+    scanner.scan_project(pid, extract_text=True)
+    res1 = pipeline.index_project(pid)
+    assert res1.indexed_files == 1
+    assert res1.total_vectors >= 1
+
+    # Simulate FAISS index loss or wipe (e.g. index file deleted or corrupted)
+    index_path = get_project_index_path(pid)
+    store = FAISSVectorStore(dimension=temp_env["provider"].dimension, index_path=index_path)
+    store.reset()
+    store.save()
+    assert store.count() == 0
+
+    # Incremental indexing with force_rebuild=False must NOT falsely skip the file
+    res2 = pipeline.index_project(pid, force_rebuild=False)
+    assert res2.indexed_files == 1, "File must be re-indexed because its vectors were missing from FAISS!"
+    assert res2.skipped_files == 0
+    assert res2.total_vectors >= 1
+
+    status = repo.get_project_index_status(pid)
+    assert status["status"] == "indexed"
+    assert status["total_vectors"] > 0
+
+
+def test_upsert_file_updates_project_id_on_reparenting(temp_env):
+    """Verify that scanning an existing file under a new project updates project_id."""
+    repo = temp_env["repo"]
+    proj1 = repo.create_project(name="P1", root_path="/shared")
+    proj2 = repo.create_project(name="P2", root_path="/")
+
+    file_path = "/shared/app.py"
+    f1 = repo.upsert_file(
+        project_id=proj1["id"],
+        path=file_path,
+        relative_path="app.py",
+        filename="app.py",
+        extension=".py",
+        category="code",
+        size_bytes=50,
+        modified_time="2026-01-01T00:00:00Z",
+    )
+    assert f1["project_id"] == proj1["id"]
+
+    f2 = repo.upsert_file(
+        project_id=proj2["id"],
+        path=file_path,
+        relative_path="shared/app.py",
+        filename="app.py",
+        extension=".py",
+        category="code",
+        size_bytes=50,
+        modified_time="2026-01-01T00:00:00Z",
+    )
+    assert f2["project_id"] == proj2["id"]
+    fetched = repo.get_file_by_path(file_path)
+    assert fetched["project_id"] == proj2["id"]

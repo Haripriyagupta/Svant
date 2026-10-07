@@ -95,8 +95,13 @@ class Settings:
             os.getenv("SVANT_LOCAL_ONLY_MODE", "true").lower() in ("true", "1", "yes")
         )
 
-        # Future Phase Placeholders (Inactive in Phase 1)
-        self.gemini_api_key: Optional[str] = os.getenv("GEMINI_API_KEY")
+        # Phase 3 RAG & AI Settings
+        self.ai_provider: str = os.getenv("SVANT_AI_PROVIDER", "none")
+        self.gemini_api_key: Optional[str] = os.getenv("SVANT_GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY")
+        self.gemini_model: str = os.getenv("SVANT_GEMINI_MODEL", "gemini-2.5-flash")
+        self.rag_top_k: int = int(os.getenv("SVANT_RAG_TOP_K", "8"))
+        self.rag_max_context_chars: int = int(os.getenv("SVANT_RAG_MAX_CONTEXT_CHARS", "30000"))
+        self.ai_timeout_seconds: float = float(os.getenv("SVANT_AI_TIMEOUT_SECONDS", "30.0"))
 
     def ensure_directories(self) -> None:
         """Create persistent storage directories if they do not exist."""

@@ -103,4 +103,22 @@ const API = {
     params.append('mode', mode);
     return this.request(`/api/search?${params.toString()}`);
   },
+
+  getAIStatus() {
+    return this.request('/api/chat/status');
+  },
+
+  chat({ message, projectId, searchMode = 'hybrid', topK = 5, provider } = {}) {
+    return this.request('/api/chat', {
+      method: 'POST',
+      body: JSON.stringify({
+        message,
+        project_id: projectId || undefined,
+        search_mode: searchMode,
+        top_k: topK,
+        provider: provider || undefined,
+      }),
+    });
+  },
 };
+

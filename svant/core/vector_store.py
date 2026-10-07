@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Set, Tuple
 
 import faiss
 import numpy as np
@@ -124,6 +124,20 @@ class FAISSVectorStore:
     def count(self) -> int:
         """Total vectors stored in index."""
         return self._index.ntotal if self._index is not None else 0
+
+    def get_all_vector_ids(self) -> Set[int]:
+        """Return the set of all 64-bit vector IDs currently present in the index."""
+        if self._index is None or self.count() == 0:
+            return set()
+        try:
+            return set(faiss.vector_to_array(self._index.id_map).tolist())
+        except Exception as e:
+            logger.warning(f"Error reading vector IDs from FAISS index: {e}")
+            return set()
+
+    def has_vector_id(self, vector_id: int) -> bool:
+        """Check if a specific vector ID is in the index."""
+        return vector_id in self.get_all_vector_ids()
 
     def save(self, target_path: Optional[Path | str] = None) -> Path:
         """Persist index to disk."""

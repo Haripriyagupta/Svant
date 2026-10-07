@@ -8,6 +8,7 @@ from __future__ import annotations
 import datetime
 import json
 import sqlite3
+import threading
 import uuid
 from typing import Any, Dict, List, Optional, Set
 
@@ -16,6 +17,8 @@ from svant.db.schema import init_db
 from svant.logger import get_logger
 
 logger = get_logger("svant.db.repository")
+
+_vector_id_lock = threading.Lock()
 
 
 def _now_iso() -> str:
@@ -142,6 +145,7 @@ class Repository:
                 conn.execute(
                     """
                     UPDATE files SET
+                        project_id = ?,
                         relative_path = ?,
                         filename = ?,
                         extension = ?,
@@ -157,6 +161,7 @@ class Repository:
                     WHERE id = ?
                     """,
                     (
+                        project_id,
                         relative_path,
                         filename,
                         extension,
@@ -494,45 +499,54 @@ class Repository:
             return []
 
         now = _now_iso()
-        with self.db.session() as conn:
-            cur = conn.execute("SELECT COALESCE(MAX(vector_id), 0) FROM chunks")
-            max_id = cur.fetchone()[0]
-            start_id = max_id + 1
+        with _vector_id_lock:
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    with self.db.session() as conn:
+                        cur = conn.execute("SELECT COALESCE(MAX(vector_id), 0) FROM chunks")
+                        max_id = cur.fetchone()[0]
+                        start_id = max_id + 1
 
-            assigned_vector_ids: List[int] = []
-            rows_to_insert = []
+                        assigned_vector_ids: List[int] = []
+                        rows_to_insert = []
 
-            for idx, c in enumerate(chunks_data):
-                vid = start_id + idx
-                assigned_vector_ids.append(vid)
-                meta_json = json.dumps(c.get("metadata", {}))
-                rows_to_insert.append((
-                    c.get("id") or str(uuid.uuid4()),
-                    vid,
-                    c["project_id"],
-                    c["file_id"],
-                    c.get("chunk_index", 0),
-                    c["text"],
-                    c.get("char_count", len(c["text"])),
-                    c.get("word_count", len(c["text"].split())),
-                    c.get("content_type", "document"),
-                    meta_json,
-                    c.get("sha256"),
-                    now,
-                ))
+                        for idx, c in enumerate(chunks_data):
+                            vid = start_id + idx
+                            assigned_vector_ids.append(vid)
+                            meta_json = json.dumps(c.get("metadata", {}))
+                            rows_to_insert.append((
+                                c.get("id") or str(uuid.uuid4()),
+                                vid,
+                                c["project_id"],
+                                c["file_id"],
+                                c.get("chunk_index", 0),
+                                c["text"],
+                                c.get("char_count", len(c["text"])),
+                                c.get("word_count", len(c["text"].split())),
+                                c.get("content_type", "document"),
+                                meta_json,
+                                c.get("sha256"),
+                                now,
+                            ))
 
-            conn.executemany(
-                """
-                INSERT INTO chunks (
-                    id, vector_id, project_id, file_id, chunk_index,
-                    text, char_count, word_count, content_type,
-                    metadata_json, sha256, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                rows_to_insert,
-            )
+                        conn.executemany(
+                            """
+                            INSERT INTO chunks (
+                                id, vector_id, project_id, file_id, chunk_index,
+                                text, char_count, word_count, content_type,
+                                metadata_json, sha256, created_at
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            rows_to_insert,
+                        )
 
-            return assigned_vector_ids
+                        return assigned_vector_ids
+                except sqlite3.IntegrityError as e:
+                    if "chunks.vector_id" in str(e) and attempt < max_retries - 1:
+                        logger.warning(f"Vector ID collision on attempt {attempt + 1}, retrying: {e}")
+                        continue
+                    raise
 
     def get_chunks_by_file(self, file_id: str) -> List[Dict[str, Any]]:
         """Retrieve all chunks for a specific file ordered by chunk index."""

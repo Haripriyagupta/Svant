@@ -5,7 +5,8 @@ Provides triggers and status monitors for vector embedding and FAISS index gener
 
 from __future__ import annotations
 
-from typing import Optional
+import threading
+from typing import Optional, Set
 from fastapi import APIRouter, HTTPException, Query, status
 
 from svant.api.schemas import (
@@ -20,6 +21,9 @@ from svant.logger import get_logger
 
 logger = get_logger("svant.api.indexing")
 router = APIRouter(prefix="/api/projects", tags=["Indexing"])
+
+_active_indexing_projects: Set[str] = set()
+_indexing_lock = threading.Lock()
 
 
 def get_repository() -> Repository:
@@ -43,6 +47,14 @@ def index_project(
             detail=f"Project '{project_id}' not found.",
         )
 
+    with _indexing_lock:
+        if project_id in _active_indexing_projects:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Indexing is already in progress for project '{project['name']}'.",
+            )
+        _active_indexing_projects.add(project_id)
+
     force_rebuild = payload.force_rebuild if payload else False
     pipeline = IndexingPipeline(repo=repo)
 
@@ -65,10 +77,18 @@ def index_project(
         )
     except Exception as e:
         logger.error(f"Indexing error on project {project_id}: {e}", exc_info=True)
+        repo.upsert_project_index_status(
+            project_id=project_id,
+            status="failed",
+            error_message=str(e),
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Indexing failed: {e}",
         )
+    finally:
+        with _indexing_lock:
+            _active_indexing_projects.discard(project_id)
 
 
 @router.get("/{project_id}/index/status", response_model=IndexStatusResponse)

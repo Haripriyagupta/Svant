@@ -105,6 +105,8 @@ class IndexingPipeline:
             if stale_vids:
                 vector_store.remove_vectors(stale_vids)
 
+        existing_vids: Set[int] = vector_store.get_all_vector_ids()
+
         for idx, file_rec in enumerate(files, start=1):
             file_id = file_rec["id"]
             file_path = file_rec["path"]
@@ -113,11 +115,18 @@ class IndexingPipeline:
             category = file_rec["category"]
             file_sha256 = file_rec.get("sha256")
 
-            # Check if file already has chunks and if hash is unchanged
+            # Check if file already has chunks and if hash is unchanged AND all vectors exist in FAISS
             current_file_chunks = self.repo.get_chunks_by_file(file_id)
+            chunks_in_vector_store = (
+                bool(current_file_chunks)
+                and (vector_store.count() > 0)
+                and all(c["vector_id"] in existing_vids for c in current_file_chunks)
+            )
+
             if (
                 not force_rebuild
                 and current_file_chunks
+                and chunks_in_vector_store
                 and file_sha256
                 and current_file_chunks[0].get("sha256") == file_sha256
             ):
@@ -152,6 +161,7 @@ class IndexingPipeline:
                 if current_file_chunks:
                     old_vids = self.repo.delete_chunks_by_file(file_id)
                     vector_store.remove_vectors(old_vids)
+                    existing_vids.difference_update(old_vids)
                 skipped_files += 1
                 continue
 
@@ -167,6 +177,10 @@ class IndexingPipeline:
                 )
 
                 if not chunks:
+                    if current_file_chunks:
+                        old_vids = self.repo.delete_chunks_by_file(file_id)
+                        vector_store.remove_vectors(old_vids)
+                        existing_vids.difference_update(old_vids)
                     skipped_files += 1
                     continue
 
@@ -174,6 +188,7 @@ class IndexingPipeline:
                 if current_file_chunks:
                     old_vids = self.repo.delete_chunks_by_file(file_id)
                     vector_store.remove_vectors(old_vids)
+                    existing_vids.difference_update(old_vids)
 
                 # 3. Generate embeddings
                 chunk_texts = [c.text for c in chunks]
@@ -199,6 +214,7 @@ class IndexingPipeline:
 
                 # 5. Add vectors to FAISS index
                 vector_store.add_vectors(assigned_vids, embeddings_matrix)
+                existing_vids.update(assigned_vids)
 
                 indexed_files += 1
                 self.repo.update_file_index_status(file_id, "indexed")
