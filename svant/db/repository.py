@@ -727,3 +727,376 @@ class Repository:
 
         return self.get_project_index_status(project_id) or {}
 
+    # =========================================================================
+    # PHASE 4 & 5: PROJECT HEALTH, FINDINGS & INTELLIGENCE
+    # =========================================================================
+
+    def upsert_project_health(
+        self,
+        project_id: str,
+        overall_score: Any = 0,
+        grade: str = "",
+        component_scores: Optional[Dict[str, Any]] = None,
+        summary: str = "",
+        critical_count: int = 0,
+        high_count: int = 0,
+        medium_count: int = 0,
+        low_count: int = 0,
+        info_count: int = 0,
+    ) -> Dict[str, Any]:
+        """Store or update the overall SVANT Health Score and component metrics for a project."""
+        if isinstance(overall_score, dict):
+            d = overall_score
+            overall_score = d.get("overall_score", 0)
+            grade = d.get("grade", "")
+            component_scores = d.get("component_scores", {})
+            summary = d.get("summary", "")
+            critical_count = d.get("critical_count", 0)
+            high_count = d.get("high_count", 0)
+            medium_count = d.get("medium_count", 0)
+            low_count = d.get("low_count", 0)
+            info_count = d.get("info_count", 0)
+
+        now = _now_iso()
+        scores_json = json.dumps(component_scores or {})
+
+        with self.db.session() as conn:
+            conn.execute(
+                """
+                INSERT INTO project_health (
+                    project_id, overall_score, grade, component_scores_json,
+                    summary, critical_count, high_count, medium_count, low_count,
+                    info_count, analyzed_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(project_id) DO UPDATE SET
+                    overall_score = excluded.overall_score,
+                    grade = excluded.grade,
+                    component_scores_json = excluded.component_scores_json,
+                    summary = excluded.summary,
+                    critical_count = excluded.critical_count,
+                    high_count = excluded.high_count,
+                    medium_count = excluded.medium_count,
+                    low_count = excluded.low_count,
+                    info_count = excluded.info_count,
+                    analyzed_at = excluded.analyzed_at,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    project_id,
+                    overall_score,
+                    grade,
+                    scores_json,
+                    summary,
+                    critical_count,
+                    high_count,
+                    medium_count,
+                    low_count,
+                    info_count,
+                    now,
+                    now,
+                    now,
+                ),
+            )
+
+        return self.get_project_health(project_id) or {}
+
+    def get_project_health(self, project_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve project health record with parsed component scores."""
+        with self.db.session() as conn:
+            cursor = conn.execute("SELECT * FROM project_health WHERE project_id = ?", (project_id,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            data = dict(row)
+            if data.get("component_scores_json"):
+                try:
+                    data["component_scores"] = json.loads(data["component_scores_json"])
+                except Exception:
+                    data["component_scores"] = {}
+            else:
+                data["component_scores"] = {}
+            return data
+
+    def upsert_findings(self, project_id: str, findings: List[Dict[str, Any]]) -> int:
+        """
+        Persist findings deterministically.
+        Re-running analysis updates existing findings (matching fingerprint) and inserts new ones,
+        while purging stale open findings not found in the latest run.
+        """
+        now = _now_iso()
+        inserted_or_updated = 0
+        active_fingerprints: Set[str] = set()
+
+        with self.db.session() as conn:
+            for f in findings:
+                fid = f.get("id") or str(uuid.uuid4())
+                fingerprint = f.get("fingerprint") or f"{project_id}:{f.get('category')}:{f.get('title')}:{f.get('relative_path', '')}"
+                active_fingerprints.add(fingerprint)
+
+                cursor = conn.execute(
+                    "SELECT id, status FROM project_findings WHERE project_id = ? AND fingerprint = ?",
+                    (project_id, fingerprint),
+                )
+                existing = cursor.fetchone()
+
+                if existing:
+                    # Update fields, preserving user status (e.g. if user resolved/ignored)
+                    conn.execute(
+                        """
+                        UPDATE project_findings SET
+                            severity = ?,
+                            priority_tier = ?,
+                            title = ?,
+                            description = ?,
+                            recommendation = ?,
+                            file_id = ?,
+                            relative_path = ?,
+                            location = ?,
+                            evidence = ?,
+                            confidence = ?,
+                            updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            f["severity"],
+                            f.get("priority_tier", "should_fix"),
+                            f["title"],
+                            f["description"],
+                            f["recommendation"],
+                            f.get("file_id"),
+                            f.get("relative_path"),
+                            f.get("location"),
+                            f.get("evidence"),
+                            f.get("confidence", 1.0),
+                            now,
+                            existing["id"],
+                        ),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        INSERT INTO project_findings (
+                            id, project_id, category, severity, priority_tier,
+                            title, description, recommendation, file_id,
+                            relative_path, location, evidence, confidence,
+                            fingerprint, status, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            fid,
+                            project_id,
+                            f["category"],
+                            f["severity"],
+                            f.get("priority_tier", "should_fix"),
+                            f["title"],
+                            f["description"],
+                            f["recommendation"],
+                            f.get("file_id"),
+                            f.get("relative_path"),
+                            f.get("location"),
+                            f.get("evidence"),
+                            f.get("confidence", 1.0),
+                            fingerprint,
+                            f.get("status", "open"),
+                            now,
+                            now,
+                        ),
+                    )
+                inserted_or_updated += 1
+
+            # Remove open findings that are no longer detected (fixed issues)
+            if active_fingerprints:
+                placeholders = ",".join("?" for _ in active_fingerprints)
+                conn.execute(
+                    f"DELETE FROM project_findings WHERE project_id = ? AND status = 'open' AND fingerprint NOT IN ({placeholders})",
+                    [project_id, *active_fingerprints],
+                )
+            else:
+                conn.execute("DELETE FROM project_findings WHERE project_id = ? AND status = 'open'", (project_id,))
+
+        return inserted_or_updated
+
+    def list_findings(
+        self,
+        project_id: str,
+        category: Optional[str] = None,
+        severity: Optional[str] = None,
+        priority_tier: Optional[str] = None,
+        status: Optional[str] = None,
+        relative_path: Optional[str] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
+        """Query project findings with filtering and ordering."""
+        clauses = ["project_id = ?"]
+        params: List[Any] = [project_id]
+
+        if category:
+            clauses.append("category = ?")
+            params.append(category)
+        if severity:
+            clauses.append("severity = ?")
+            params.append(severity)
+        if priority_tier:
+            clauses.append("priority_tier = ?")
+            params.append(priority_tier)
+        if status:
+            clauses.append("status = ?")
+            params.append(status)
+        if relative_path:
+            clauses.append("relative_path LIKE ?")
+            params.append(f"%{relative_path}%")
+
+        # Custom severity order: critical > high > medium > low > info
+        order_clause = """
+            CASE severity
+                WHEN 'critical' THEN 1
+                WHEN 'high' THEN 2
+                WHEN 'medium' THEN 3
+                WHEN 'low' THEN 4
+                WHEN 'info' THEN 5
+                ELSE 6
+            END,
+            created_at DESC
+        """
+
+        sql = f"""
+            SELECT * FROM project_findings
+            WHERE {' AND '.join(clauses)}
+            ORDER BY {order_clause}
+            LIMIT ? OFFSET ?
+        """
+        params.extend([limit, offset])
+
+        with self.db.session() as conn:
+            cursor = conn.execute(sql, params)
+            return [dict(row) for row in cursor.fetchall()]
+
+    def get_finding(self, finding_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve single finding by ID."""
+        with self.db.session() as conn:
+            cursor = conn.execute("SELECT * FROM project_findings WHERE id = ?", (finding_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def update_finding_status(self, finding_id: str, status: str) -> bool:
+        """Update finding status ('open', 'resolved', 'ignored')."""
+        now = _now_iso()
+        with self.db.session() as conn:
+            cursor = conn.execute(
+                "UPDATE project_findings SET status = ?, updated_at = ? WHERE id = ?",
+                (status, now, finding_id),
+            )
+            return cursor.rowcount > 0
+
+    def get_findings_counts_by_severity(self, project_id: str) -> Dict[str, int]:
+        """Aggregate finding counts by severity for a project."""
+        counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+        with self.db.session() as conn:
+            cursor = conn.execute(
+                "SELECT severity, COUNT(*) as cnt FROM project_findings WHERE project_id = ? AND status = 'open' GROUP BY severity",
+                (project_id,),
+            )
+            for row in cursor.fetchall():
+                sev = row["severity"].lower()
+                if sev in counts:
+                    counts[sev] = row["cnt"]
+        return counts
+
+    def create_analysis_run(self, project_id: str) -> str:
+        """Record the start of an intelligence analysis run."""
+        run_id = str(uuid.uuid4())
+        now = _now_iso()
+        with self.db.session() as conn:
+            conn.execute(
+                """
+                INSERT INTO analysis_runs (id, project_id, status, findings_count, health_score, duration_seconds, started_at)
+                VALUES (?, ?, 'running', 0, 0, 0.0, ?)
+                """,
+                (run_id, project_id, now),
+            )
+        return run_id
+
+    def update_analysis_run(
+        self,
+        run_id: str,
+        status: str,
+        findings_count: Optional[int] = None,
+        health_score: Optional[int] = None,
+        duration_seconds: Optional[float] = None,
+        error_message: Optional[str] = None,
+        summary: Optional[str] = None,
+        **kwargs: Any,
+    ) -> None:
+        """Update analysis run completion details."""
+        now = _now_iso()
+        fields = ["status = ?", "completed_at = ?"]
+        params: List[Any] = [status, now]
+
+        if findings_count is not None:
+            fields.append("findings_count = ?")
+            params.append(findings_count)
+        if health_score is not None:
+            fields.append("health_score = ?")
+            params.append(health_score)
+        if duration_seconds is not None:
+            fields.append("duration_seconds = ?")
+            params.append(duration_seconds)
+        if error_message is not None:
+            fields.append("error_message = ?")
+            params.append(error_message)
+
+        params.append(run_id)
+        with self.db.session() as conn:
+            conn.execute(f"UPDATE analysis_runs SET {', '.join(fields)} WHERE id = ?", params)
+
+    def get_latest_analysis_run(self, project_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve the most recent analysis run for a project."""
+        with self.db.session() as conn:
+            cursor = conn.execute(
+                "SELECT * FROM analysis_runs WHERE project_id = ? ORDER BY started_at DESC LIMIT 1",
+                (project_id,),
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def get_duplicate_files(self, project_id: str) -> List[Dict[str, Any]]:
+        """
+        Identify exact duplicate files in a project based on SHA-256 hash.
+        Groups files sharing the same content hash.
+        """
+        sql = """
+            SELECT sha256, COUNT(*) as count, SUM(size_bytes) as total_size, MIN(size_bytes) as file_size
+            FROM files
+            WHERE project_id = ? AND sha256 IS NOT NULL AND sha256 != ''
+            GROUP BY sha256
+            HAVING count > 1
+            ORDER BY total_size DESC
+        """
+        with self.db.session() as conn:
+            cursor = conn.execute(sql, (project_id,))
+            cluster_rows = cursor.fetchall()
+            clusters = []
+
+            for row in cluster_rows:
+                h = row["sha256"]
+                files_cur = conn.execute(
+                    "SELECT id, filename, relative_path, size_bytes, category, modified_time FROM files WHERE project_id = ? AND sha256 = ?",
+                    (project_id, h),
+                )
+                file_items = [dict(f) for f in files_cur.fetchall()]
+                # Wasted bytes = (count - 1) * file_size
+                wasted_bytes = (row["count"] - 1) * row["file_size"]
+                clusters.append({
+                    "sha256": h,
+                    "count": row["count"],
+                    "file_count": row["count"],
+                    "size_bytes": row["file_size"],
+                    "file_size": row["file_size"],
+                    "wasted_bytes": wasted_bytes,
+                    "files": file_items,
+                })
+
+            return clusters
+
+

@@ -7,6 +7,7 @@ AI generation (Gemini, Mock, or Local-Only), and citation generation.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from svant.config import settings
@@ -108,6 +109,64 @@ class RAGPipeline:
 
         # 4. Context Assembly & Deduplication
         raw_items = self.assembler.assemble(search_hits, project_id=project_id)
+
+        # 4b. Project Intelligence & Health Enrichment
+        query_lower = clean_msg.lower()
+        health_keywords = (
+            "health", "security", "vulnerability", "secret", "finding", "recommendation",
+            "clean", "hygiene", "score", "grade", "todo", "issue", "debt", "risk", "status", "audit", "plan"
+        )
+        if any(k in query_lower for k in health_keywords):
+            health_data = self.repo.get_project_health(project_id)
+            findings_data = self.repo.list_findings(project_id, status="open", limit=10)
+            if health_data or findings_data:
+                intel_chunks = []
+                if health_data:
+                    score = health_data.get("overall_score", 0)
+                    grade = health_data.get("grade", "N/A")
+                    summary = health_data.get("summary", "")
+                    crit = health_data.get("critical_count", 0)
+                    high = health_data.get("high_count", 0)
+                    med = health_data.get("medium_count", 0)
+                    health_txt = (
+                        f"SVANT Project Health Score: {score}/100 (Grade {grade}).\n"
+                        f"Health Summary: {summary}\n"
+                        f"Active Issues: {crit} Critical, {high} High, {med} Medium."
+                    )
+                    intel_chunks.append(ContextItem(
+                        file_id="project-health-summary",
+                        chunk_id="health-0",
+                        filename="PROJECT_HEALTH.md",
+                        relative_path="PROJECT_HEALTH.md",
+                        project_id=project_id,
+                        chunk_index=0,
+                        content=health_txt,
+                        relevance_score=1.0,
+                        section="Health Overview",
+                    ))
+                for idx, f in enumerate(findings_data[:8]):
+                    f_rel = f.get("relative_path") or "Project Root"
+                    f_fname = Path(f_rel).name or "finding"
+                    f_txt = (
+                        f"Finding [{f.get('severity', '').upper()}]: {f.get('title')}\n"
+                        f"File: {f_rel} ({f.get('location') or 'general'})\n"
+                        f"Description: {f.get('description')}\n"
+                        f"Evidence: {f.get('evidence') or 'None'}\n"
+                        f"Recommendation: {f.get('recommendation')}\n"
+                        f"Priority: {f.get('priority_tier')}"
+                    )
+                    intel_chunks.append(ContextItem(
+                        file_id=f.get("file_id") or f"finding-{idx}",
+                        chunk_id=f.get("id") or f"f-{idx}",
+                        filename=f_fname,
+                        relative_path=f_rel,
+                        project_id=project_id,
+                        chunk_index=0,
+                        content=f_txt,
+                        relevance_score=0.95,
+                        section=f"Finding: {f.get('category')}",
+                    ))
+                raw_items = intel_chunks + raw_items
 
         # Handle Empty Retrieval
         if not raw_items:

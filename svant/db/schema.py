@@ -104,6 +104,63 @@ CREATE INDEX IF NOT EXISTS idx_extractions_project ON file_extractions(project_i
 CREATE INDEX IF NOT EXISTS idx_chunks_project_id ON chunks(project_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_file_id ON chunks(file_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_vector_id ON chunks(vector_id);
+
+-- 8. Project Health & Scoring (Phase 4 & 5)
+CREATE TABLE IF NOT EXISTS project_health (
+    project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+    overall_score INTEGER NOT NULL DEFAULT 0,
+    grade TEXT NOT NULL DEFAULT 'C',
+    component_scores_json TEXT NOT NULL DEFAULT '{}',
+    summary TEXT NOT NULL DEFAULT '',
+    critical_count INTEGER NOT NULL DEFAULT 0,
+    high_count INTEGER NOT NULL DEFAULT 0,
+    medium_count INTEGER NOT NULL DEFAULT 0,
+    low_count INTEGER NOT NULL DEFAULT 0,
+    info_count INTEGER NOT NULL DEFAULT 0,
+    analyzed_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+-- 9. Project Intelligence Findings (Phase 4 & 5)
+CREATE TABLE IF NOT EXISTS project_findings (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    category TEXT NOT NULL,
+    severity TEXT NOT NULL,
+    priority_tier TEXT NOT NULL DEFAULT 'should_fix',
+    title TEXT NOT NULL,
+    description TEXT NOT NULL,
+    recommendation TEXT NOT NULL,
+    file_id TEXT REFERENCES files(id) ON DELETE SET NULL,
+    relative_path TEXT,
+    location TEXT,
+    evidence TEXT,
+    confidence REAL NOT NULL DEFAULT 1.0,
+    fingerprint TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+-- 10. Analysis Execution Runs (Phase 4 & 5)
+CREATE TABLE IF NOT EXISTS analysis_runs (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'running',
+    findings_count INTEGER NOT NULL DEFAULT 0,
+    health_score INTEGER NOT NULL DEFAULT 0,
+    duration_seconds REAL NOT NULL DEFAULT 0.0,
+    error_message TEXT,
+    started_at TEXT NOT NULL,
+    completed_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_findings_project_id ON project_findings(project_id);
+CREATE INDEX IF NOT EXISTS idx_findings_severity ON project_findings(severity);
+CREATE INDEX IF NOT EXISTS idx_findings_category ON project_findings(category);
+CREATE INDEX IF NOT EXISTS idx_findings_fingerprint ON project_findings(fingerprint);
+CREATE INDEX IF NOT EXISTS idx_analysis_runs_project_id ON analysis_runs(project_id);
 """
 
 

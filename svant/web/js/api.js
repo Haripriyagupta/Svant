@@ -120,5 +120,66 @@ const API = {
       }),
     });
   },
+
+  // Phase 4 & 5: Project Intelligence, Health & Security
+  analyzeProject(projectId) {
+    return this.request(`/api/projects/${projectId}/analyze`, {
+      method: 'POST',
+    });
+  },
+
+  getProjectHealth(projectId) {
+    return this.request(`/api/projects/${projectId}/health`);
+  },
+
+  getProjectFindings(projectId, { category, severity, status, priorityTier } = {}) {
+    const params = new URLSearchParams();
+    if (category) params.append('category', category);
+    if (severity) params.append('severity', severity);
+    if (status) params.append('status', status);
+    if (priorityTier) params.append('priority_tier', priorityTier);
+    const qs = params.toString();
+    return this.request(`/api/projects/${projectId}/findings${qs ? '?' + qs : ''}`);
+  },
+
+  updateFindingStatus(projectId, findingId, status) {
+    return this.request(`/api/projects/${projectId}/findings/${findingId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
+    });
+  },
+
+  getProjectRecommendations(projectId) {
+    return this.request(`/api/projects/${projectId}/recommendations`);
+  },
+
+  getProjectStatistics(projectId) {
+    return this.request(`/api/projects/${projectId}/statistics`);
+  },
+
+  getProjectDuplicates(projectId) {
+    return this.request(`/api/projects/${projectId}/duplicates`);
+  },
+
+  aiSummarizeProject(projectId, provider) {
+    const qs = provider ? `?provider=${encodeURIComponent(provider)}` : '';
+    return this.request(`/api/projects/${projectId}/ai/summarize${qs}`, {
+      method: 'POST',
+    });
+  },
+
+  aiImprovementPlan(projectId, provider) {
+    const qs = provider ? `?provider=${encodeURIComponent(provider)}` : '';
+    return this.request(`/api/projects/${projectId}/ai/plan${qs}`, {
+      method: 'POST',
+    });
+  },
+
+  aiExplainFinding(projectId, findingId, provider) {
+    const qs = provider ? `?provider=${encodeURIComponent(provider)}` : '';
+    return this.request(`/api/projects/${projectId}/ai/explain-finding/${findingId}${qs}`, {
+      method: 'POST',
+    });
+  },
 };
 

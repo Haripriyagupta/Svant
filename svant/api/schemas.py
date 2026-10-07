@@ -165,3 +165,64 @@ class AIStatusResponse(BaseModel):
     is_available: bool = True
 
 
+class FindingResponse(BaseModel):
+    id: str
+    project_id: str
+    category: str
+    severity: str
+    priority_tier: str = "should_fix"
+    title: str
+    description: str
+    recommendation: str
+    file_id: Optional[str] = None
+    relative_path: Optional[str] = None
+    location: Optional[str] = None
+    evidence: Optional[str] = None
+    confidence: float = 1.0
+    status: str = "open"
+    created_at: str = ""
+    updated_at: str = ""
+
+
+class FindingStatusUpdateRequest(BaseModel):
+    status: str = Field(..., description="Target status: open, acknowledged, resolved, or ignored")
+
+
+class ProjectHealthResponse(BaseModel):
+    project_id: str
+    overall_score: int
+    grade: str
+    summary: str
+    critical_count: int = 0
+    high_count: int = 0
+    medium_count: int = 0
+    low_count: int = 0
+    info_count: int = 0
+    component_scores: Dict[str, Any]
+    analyzed_at: Optional[str] = None
+
+
+class RecommendationsResponse(BaseModel):
+    project_id: str
+    overall_score: Optional[int] = None
+    grade: Optional[str] = None
+    summary: Optional[str] = None
+    total_open: int = 0
+    recommendations_by_tier: Dict[str, List[Dict[str, Any]]]
+
+
+class DuplicateClusterResponse(BaseModel):
+    sha256: str
+    size_bytes: int
+    count: int
+    wasted_bytes: int
+    files: List[Dict[str, Any]]
+
+
+class AIActionResponse(BaseModel):
+    project_id: str
+    action: str
+    content: str
+    provider: str
+
+

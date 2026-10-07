@@ -43,21 +43,21 @@
           <span class="tag-live">HYBRID</span>
         </button>
 
-        <div class="nav-section-label">ROADMAP EXPANSION</div>
-        <button class="nav-item coming-soon" data-page="security">
+        <div class="nav-section-label">INTELLIGENCE & HEALTH</div>
+        <button class="nav-item" data-page="security">
           <svg class="icon" viewBox="0 0 24 24"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z"/></svg>
           <span>Security</span>
-          <span class="pill-soon">Phase 4</span>
+          <span class="tag-live">Phase 4</span>
         </button>
-        <button class="nav-item coming-soon" data-page="duplicates">
+        <button class="nav-item" data-page="duplicates">
           <svg class="icon" viewBox="0 0 24 24"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
           <span>Duplicates</span>
-          <span class="pill-soon">Phase 5</span>
+          <span class="tag-live">Phase 5</span>
         </button>
-        <button class="nav-item coming-soon" data-page="health">
+        <button class="nav-item" data-page="health">
           <svg class="icon" viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-2 10h-4v4h-2v-4H7v-2h4V7h2v4h4v2z"/></svg>
           <span>Health</span>
-          <span class="pill-soon">Phase 5</span>
+          <span class="tag-live">Phase 5</span>
         </button>
         <button class="nav-item" data-page="aichat">
           <svg class="icon" viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z"/></svg>
@@ -253,34 +253,172 @@
           </div>
         </section>
 
-        <!-- 5. PLACEHOLDER PAGES (Clear, honest communication of future phases) -->
+        <!-- 4. SECURITY & EXPOSURES PAGE (Phase 4) -->
         <section id="page-security" class="page-view">
-          <div class="future-phase-card">
-            <div class="phase-badge">ROADMAP — PHASE 4</div>
-            <h2>Local Secret & Exposure Detection</h2>
-            <p>Automated static secret scanning, credential detection, private key exposure monitoring, and sensitive pattern masking will be implemented in Phase 4.</p>
-            <div class="future-feature-list">
-              <div class="future-feature-item">✓ API Key and Token Pattern Recognition</div>
-              <div class="future-feature-item">✓ Private Key and Certificate Detection</div>
-              <div class="future-feature-item">✓ Git History Leak Scanner</div>
-              <div class="future-feature-item">✓ Local Redaction Before AI Ingestion</div>
+          <div class="panel-header-actions mb-4">
+            <div class="filter-group">
+              <label for="security-project-select" class="filter-label">Project:</label>
+              <select id="security-project-select" class="form-control select-project"></select>
+            </div>
+            <div class="filter-group">
+              <label for="security-severity-filter" class="filter-label">Severity:</label>
+              <select id="security-severity-filter" class="form-control">
+                <option value="">All Severities</option>
+                <option value="critical">Critical</option>
+                <option value="high">High</option>
+                <option value="medium">Medium</option>
+                <option value="low">Low</option>
+                <option value="info">Info</option>
+              </select>
+            </div>
+            <div class="filter-group">
+              <label for="security-status-filter" class="filter-label">Status:</label>
+              <select id="security-status-filter" class="form-control">
+                <option value="">All Statuses</option>
+                <option value="open" selected>Open</option>
+                <option value="acknowledged">Acknowledged</option>
+                <option value="resolved">Resolved</option>
+                <option value="ignored">Ignored</option>
+              </select>
+            </div>
+            <button class="btn btn-primary" id="btn-security-scan">
+              <span>🛡️ Run Security Scan</span>
+            </button>
+          </div>
+
+          <div class="security-banner">
+            <div class="security-banner-icon">🔒</div>
+            <div class="security-banner-info">
+              <h4>Zero-Exposure Secret & Vulnerability Shield</h4>
+              <p>SVANT detects exposed credentials, private keys, dangerous configs, and insecure files locally. All raw secret values are masked with <code>[REDACTED]</code> before any storage or display.</p>
+            </div>
+            <div class="security-banner-counts" id="security-banner-counts">
+              <span class="count-badge count-crit" id="sec-count-crit">0 Critical</span>
+              <span class="count-badge count-high" id="sec-count-high">0 High</span>
+              <span class="count-badge count-total" id="sec-count-total">0 Total</span>
+            </div>
+          </div>
+
+          <div class="findings-list mt-4" id="security-findings-list">
+            <div class="empty-state-card">
+              <div class="empty-icon">🛡️</div>
+              <h3>No Security Findings</h3>
+              <p>Select a project and click "Run Security Scan" to discover exposed secrets, vulnerable files, and insecure configurations.</p>
             </div>
           </div>
         </section>
 
+        <!-- 5. DUPLICATE FILE ANALYSIS (Phase 5) -->
         <section id="page-duplicates" class="page-view">
-          <div class="future-phase-card">
-            <div class="phase-badge">ROADMAP — PHASE 5</div>
-            <h2>Duplicate File Analysis</h2>
-            <p>Hash-based duplicate detection and fuzzy document similarity analysis will be introduced in Phase 5 to reclaim local storage without modifying files.</p>
+          <div class="panel-header-actions mb-4">
+            <div class="filter-group">
+              <label for="duplicates-project-select" class="filter-label">Project:</label>
+              <select id="duplicates-project-select" class="form-control select-project"></select>
+            </div>
+            <button class="btn btn-primary" id="btn-refresh-duplicates">
+              <span>🔄 Refresh Duplicates</span>
+            </button>
+          </div>
+
+          <div class="duplicates-summary-card">
+            <div class="duplicates-metric">
+              <div class="dup-metric-val text-accent" id="dup-total-clusters">0</div>
+              <div class="dup-metric-lbl">Duplicate Clusters</div>
+            </div>
+            <div class="duplicates-metric">
+              <div class="dup-metric-val text-warning" id="dup-wasted-storage">0 KB</div>
+              <div class="dup-metric-lbl">Wasted Storage</div>
+            </div>
+            <div class="duplicates-metric">
+              <div class="dup-metric-val" id="dup-total-copies">0</div>
+              <div class="dup-metric-lbl">Redundant Files</div>
+            </div>
+          </div>
+
+          <div class="duplicates-notice">
+            💡 <strong>Safe Inspection Policy:</strong> SVANT highlights identical files (SHA-256 matches) to help you organize storage safely. SVANT never deletes files automatically.
+          </div>
+
+          <div class="duplicates-list mt-4" id="duplicates-clusters-list">
+            <div class="empty-state-card">
+              <div class="empty-icon">📄</div>
+              <h3>No Duplicate Files Detected</h3>
+              <p>Select a project to review identical files sharing the exact same content hash.</p>
+            </div>
           </div>
         </section>
 
+        <!-- 6. PROJECT HEALTH & SCORING (Phase 5) -->
         <section id="page-health" class="page-view">
-          <div class="future-phase-card">
-            <div class="phase-badge">ROADMAP — PHASE 5</div>
-            <h2>Project Architecture & Health Scoring</h2>
-            <p>Stale file metrics, large dependency bloating, orphaned assets, and codebase structure insights will be implemented in Phase 5.</p>
+          <div class="panel-header-actions mb-4">
+            <div class="filter-group">
+              <label for="health-project-select" class="filter-label">Project:</label>
+              <select id="health-project-select" class="form-control select-project"></select>
+            </div>
+            <div class="header-button-group">
+              <button class="btn btn-secondary" id="btn-ai-summarize">
+                <span>✨ Summarize Project</span>
+              </button>
+              <button class="btn btn-secondary" id="btn-ai-plan">
+                <span>📋 Remediation Plan</span>
+              </button>
+              <button class="btn btn-primary" id="btn-run-analysis">
+                <span>⚡ Run Health Analysis</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Empty state if not analyzed yet -->
+          <div id="health-empty-state" class="empty-state-card">
+            <div class="empty-icon">📊</div>
+            <h3>No Health Analysis Run Yet</h3>
+            <p>Select a project and click "Run Health Analysis" to evaluate security exposures, test coverage, dependencies, documentation, and code hygiene.</p>
+          </div>
+
+          <!-- Health Dashboard Content -->
+          <div id="health-content" style="display: none;">
+            <!-- Top Overall Grade & Summary Card -->
+            <div class="health-summary-card">
+              <div class="grade-badge-large" id="health-grade-badge">A</div>
+              <div class="health-summary-info">
+                <div class="score-title">
+                  <span class="score-number" id="health-score-number">100</span>
+                  <span class="score-max">/ 100</span>
+                  <span class="score-label">SVANT Health Score</span>
+                </div>
+                <p class="health-summary-text" id="health-summary-text">Good health overall. No critical security exposures.</p>
+                <div class="health-meta-bar">
+                  <span class="health-meta-item" id="health-timestamp">Last analyzed: Just now</span>
+                  <span class="health-meta-badge badge-crit" id="health-count-crit">0 Critical</span>
+                  <span class="health-meta-badge badge-high" id="health-count-high">0 High</span>
+                  <span class="health-meta-badge badge-med" id="health-count-med">0 Medium</span>
+                  <span class="health-meta-badge badge-low" id="health-count-low">0 Low</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Component Breakdown Grid -->
+            <div class="section-title mt-4"><h3>Explainable Component Breakdown</h3></div>
+            <div class="components-grid" id="health-components-grid">
+              <!-- 7 component cards rendered here -->
+            </div>
+
+            <!-- Prioritized Recommendations -->
+            <div class="section-title mt-4">
+              <div class="flex-between">
+                <h3>Actionable Recommendations</h3>
+                <div class="filter-pills" id="recommendation-tier-filter">
+                  <button class="pill active" data-tier="all">All Tiers</button>
+                  <button class="pill" data-tier="fix_first">Fix First</button>
+                  <button class="pill" data-tier="should_fix">Should Fix</button>
+                  <button class="pill" data-tier="nice_to_improve">Nice to Improve</button>
+                  <button class="pill" data-tier="informational">Info</button>
+                </div>
+              </div>
+            </div>
+            <div class="findings-list" id="health-recommendations-list">
+              <!-- Recommendation cards rendered here -->
+            </div>
           </div>
         </section>
 
@@ -421,6 +559,25 @@
       </div>
       <div class="modal-footer">
         <button class="btn btn-ghost" id="btn-close-detail">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: AI Insight Viewer -->
+  <div class="modal-backdrop" id="modal-ai-insight">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-header">
+        <h3 id="modal-ai-title">AI Project Insight</h3>
+        <button class="btn-close" id="btn-close-ai-modal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="ai-insight-content" id="modal-ai-body">
+          <p>Analyzing project intelligence...</p>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" id="btn-copy-ai-insight">Copy Markdown</button>
+        <button class="btn btn-primary" id="btn-discuss-in-chat">Discuss in AI Chat</button>
       </div>
     </div>
   </div>

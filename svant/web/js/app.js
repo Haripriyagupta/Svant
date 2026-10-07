@@ -70,9 +70,9 @@ document.addEventListener('DOMContentLoaded', () => {
     projects: { title: 'Tracked Projects', subtitle: 'Manage local folders, trigger scans, and inspect disk status' },
     files: { title: 'Indexed Files', subtitle: 'Explore scanned project files, metadata, and extracted text' },
     search: { title: 'Knowledge Search', subtitle: 'High-speed local keyword search via SQLite FTS5 engine' },
-    security: { title: 'Secret Detection', subtitle: 'Static secret scanning and leak prevention (Roadmap Phase 4)' },
-    duplicates: { title: 'Duplicate Analysis', subtitle: 'Identify redundant and identical files (Roadmap Phase 5)' },
-    health: { title: 'Project Health', subtitle: 'Codebase architecture metrics and hygiene scoring (Roadmap Phase 5)' },
+    security: { title: 'Security & Secret Shield', subtitle: 'Static credential scanning, dangerous config detection, and zero-exposure masking' },
+    duplicates: { title: 'Duplicate File Analysis', subtitle: 'SHA-256 hash-based identical file discovery and storage reclamation' },
+    health: { title: 'Project Health & Architecture', subtitle: 'Explainable SVANT Health Score (0-100), component weights, and prioritized fixes' },
     aichat: { title: 'Grounded AI Assistant', subtitle: 'Privacy-aware project Q&A with strict context grounding & citations' },
     settings: { title: 'Preferences', subtitle: 'Configuration and storage path settings (Roadmap Phase 7)' },
   };
@@ -96,6 +96,9 @@ document.addEventListener('DOMContentLoaded', () => {
     if (pageId === 'dashboard') loadDashboardData();
     if (pageId === 'projects') loadProjectsView();
     if (pageId === 'files') loadFilesView();
+    if (pageId === 'security') loadSecurityView();
+    if (pageId === 'duplicates') loadDuplicatesView();
+    if (pageId === 'health') loadHealthView();
     if (pageId === 'aichat') {
       updateAIStatusBadge();
       if (!state.projects.length) loadDashboardData();
@@ -862,6 +865,482 @@ document.addEventListener('DOMContentLoaded', () => {
         </div>
       `;
       showToast('Chat history cleared', 'info');
+    });
+  }
+
+  // =====================================================================
+  // PHASE 4 & 5: HEALTH, SECURITY, DUPLICATES & AI INSIGHTS
+  // =====================================================================
+
+  let currentRecommendationsData = null;
+  let activeTierFilter = 'all';
+
+  function populateSelect(selectElem, currentVal) {
+    if (!selectElem) return;
+    const existingVal = currentVal || selectElem.value;
+    selectElem.innerHTML = '';
+    state.projects.forEach((p) => {
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      opt.textContent = `${p.name} (${p.root_path})`;
+      selectElem.appendChild(opt);
+    });
+    if (existingVal && state.projects.some((p) => p.id === existingVal)) {
+      selectElem.value = existingVal;
+    } else if (state.projects.length) {
+      selectElem.value = state.projects[0].id;
+    }
+  }
+
+  // --- HEALTH VIEW ---
+  async function loadHealthView() {
+    const projSelect = document.getElementById('health-project-select');
+    populateSelect(projSelect);
+    const projectId = projSelect ? projSelect.value : null;
+    if (!projectId) {
+      document.getElementById('health-empty-state').style.display = 'block';
+      document.getElementById('health-content').style.display = 'none';
+      return;
+    }
+
+    try {
+      const health = await API.getProjectHealth(projectId);
+      document.getElementById('health-empty-state').style.display = 'none';
+      const content = document.getElementById('health-content');
+      content.style.display = 'block';
+
+      // Overall Grade & Summary
+      const gradeBadge = document.getElementById('health-grade-badge');
+      gradeBadge.textContent = health.grade;
+      gradeBadge.className = `grade-badge-large grade-${health.grade}`;
+
+      document.getElementById('health-score-number').textContent = health.overall_score;
+      document.getElementById('health-summary-text').textContent = health.summary;
+      document.getElementById('health-timestamp').textContent = `Last analyzed: ${formatDate(health.analyzed_at)}`;
+
+      document.getElementById('health-count-crit').textContent = `${health.critical_count} Critical`;
+      document.getElementById('health-count-high').textContent = `${health.high_count} High`;
+      document.getElementById('health-count-med').textContent = `${health.medium_count} Medium`;
+      document.getElementById('health-count-low').textContent = `${health.low_count} Low`;
+
+      // Components Grid
+      const compGrid = document.getElementById('health-components-grid');
+      compGrid.innerHTML = '';
+      if (health.component_scores) {
+        Object.entries(health.component_scores).forEach(([catKey, comp]) => {
+          const compCard = document.createElement('div');
+          compCard.className = 'component-card';
+          let colorClass = 'score-green';
+          if (comp.score < 60) colorClass = 'score-red';
+          else if (comp.score < 80) colorClass = 'score-yellow';
+          else if (comp.score < 90) colorClass = 'score-blue';
+
+          const pctWeight = Math.round(comp.weight * 100);
+          compCard.innerHTML = `
+            <div class="comp-header">
+              <span class="comp-name">${escapeHtml(comp.category || catKey)}</span>
+              <span class="comp-weight">${pctWeight}% Weight · <strong>${comp.score}/100</strong></span>
+            </div>
+            <div class="comp-score-bar">
+              <div class="comp-score-fill ${colorClass}" style="width: ${comp.score}%;"></div>
+            </div>
+            <div class="comp-rationale">${escapeHtml(comp.rationale)}</div>
+          `;
+          compGrid.appendChild(compCard);
+        });
+      }
+
+      // Recommendations
+      loadRecommendations(projectId);
+    } catch (err) {
+      // Not analyzed yet
+      document.getElementById('health-empty-state').style.display = 'block';
+      document.getElementById('health-content').style.display = 'none';
+    }
+  }
+
+  async function loadRecommendations(projectId) {
+    try {
+      const recs = await API.getProjectRecommendations(projectId);
+      currentRecommendationsData = recs;
+      renderRecommendationsList();
+    } catch (err) {
+      console.error('Error fetching recommendations:', err);
+    }
+  }
+
+  function renderRecommendationsList() {
+    const recsContainer = document.getElementById('health-recommendations-list');
+    if (!recsContainer || !currentRecommendationsData) return;
+    recsContainer.innerHTML = '';
+
+    const tiers = currentRecommendationsData.recommendations_by_tier || {};
+    let allItems = [];
+    if (activeTierFilter === 'all') {
+      allItems = [
+        ...(tiers.fix_first || []),
+        ...(tiers.should_fix || []),
+        ...(tiers.nice_to_improve || []),
+        ...(tiers.informational || []),
+      ];
+    } else {
+      allItems = tiers[activeTierFilter] || [];
+    }
+
+    if (!allItems.length) {
+      recsContainer.innerHTML = `
+        <div class="empty-state-card">
+          <div class="empty-icon">✅</div>
+          <h3>No Open Issues in this Tier</h3>
+          <p>Great job! No unresolved findings match the selected filter.</p>
+        </div>
+      `;
+      return;
+    }
+
+    allItems.forEach((f) => {
+      const card = createFindingCard(f, document.getElementById('health-project-select').value, () => {
+        loadHealthView();
+      });
+      recsContainer.appendChild(card);
+    });
+  }
+
+  function createFindingCard(finding, projectId, onStatusUpdate) {
+    const card = document.createElement('div');
+    card.className = `finding-card severity-${finding.severity}`;
+
+    const sevBadgeClass = `badge-${finding.severity === 'critical' ? 'crit' : finding.severity === 'high' ? 'high' : finding.severity === 'medium' ? 'med' : 'low'}`;
+    const evidenceHtml = finding.evidence ? `<div class="finding-evidence"><code>${escapeHtml(finding.evidence)}</code></div>` : '';
+
+    card.innerHTML = `
+      <div class="finding-top-row">
+        <div class="finding-title-group">
+          <span class="health-meta-badge ${sevBadgeClass}">${finding.severity.toUpperCase()}</span>
+          <span class="finding-title">${escapeHtml(finding.title)}</span>
+          <span class="finding-path">${escapeHtml(finding.relative_path || 'Project Root')}</span>
+        </div>
+        <div class="finding-actions">
+          <select class="form-control select-status-toggle" style="font-size: 11px; padding: 4px 8px;">
+            <option value="open" ${finding.status === 'open' ? 'selected' : ''}>Open</option>
+            <option value="acknowledged" ${finding.status === 'acknowledged' ? 'selected' : ''}>Acknowledged</option>
+            <option value="resolved" ${finding.status === 'resolved' ? 'selected' : ''}>Resolved</option>
+            <option value="ignored" ${finding.status === 'ignored' ? 'selected' : ''}>Ignored</option>
+          </select>
+          <button class="btn btn-ghost btn-sm btn-explain-finding" title="Ask AI to analyze and provide code fix">
+            <span>💡 Explain</span>
+          </button>
+        </div>
+      </div>
+      <div class="finding-desc">${escapeHtml(finding.description)}</div>
+      ${evidenceHtml}
+      <div class="finding-rec">
+        <strong>Recommendation:</strong> ${escapeHtml(finding.recommendation)}
+      </div>
+    `;
+
+    // Status change listener
+    const statusSelect = card.querySelector('.select-status-toggle');
+    statusSelect.addEventListener('change', async () => {
+      try {
+        await API.updateFindingStatus(projectId, finding.id, statusSelect.value);
+        showToast(`Finding marked as ${statusSelect.value}`, 'success');
+        if (onStatusUpdate) onStatusUpdate();
+      } catch (err) {
+        showToast(`Failed to update status: ${err.message}`, 'error');
+      }
+    });
+
+    // Explain listener
+    const explainBtn = card.querySelector('.btn-explain-finding');
+    explainBtn.addEventListener('click', async () => {
+      showAIModal(`Explaining Finding: ${finding.title}`, 'Analyzing finding impact and drafting code remediation...');
+      try {
+        const res = await API.aiExplainFinding(projectId, finding.id);
+        renderAIModalContent(res.content);
+      } catch (err) {
+        renderAIModalContent(`Failed to explain finding: ${err.message}`);
+      }
+    });
+
+    return card;
+  }
+
+  // --- SECURITY VIEW ---
+  async function loadSecurityView() {
+    const projSelect = document.getElementById('security-project-select');
+    populateSelect(projSelect);
+    const projectId = projSelect ? projSelect.value : null;
+    if (!projectId) return;
+
+    const sevFilter = document.getElementById('security-severity-filter').value;
+    const statusFilter = document.getElementById('security-status-filter').value;
+
+    try {
+      const findings = await API.getProjectFindings(projectId, {
+        category: 'security',
+        severity: sevFilter || undefined,
+        status: statusFilter || undefined,
+      });
+
+      // Update counters
+      const critCount = findings.filter((f) => f.severity === 'critical' && f.status === 'open').length;
+      const highCount = findings.filter((f) => f.severity === 'high' && f.status === 'open').length;
+      document.getElementById('sec-count-crit').textContent = `${critCount} Critical`;
+      document.getElementById('sec-count-high').textContent = `${highCount} High`;
+      document.getElementById('sec-count-total').textContent = `${findings.length} Total`;
+
+      const listContainer = document.getElementById('security-findings-list');
+      listContainer.innerHTML = '';
+
+      if (!findings.length) {
+        listContainer.innerHTML = `
+          <div class="empty-state-card">
+            <div class="empty-icon">🛡️</div>
+            <h3>No Security Findings Detected</h3>
+            <p>Codebase is clean. Zero exposed secrets or dangerous configurations match this filter.</p>
+          </div>
+        `;
+        return;
+      }
+
+      findings.forEach((f) => {
+        const card = createFindingCard(f, projectId, () => {
+          loadSecurityView();
+        });
+        listContainer.appendChild(card);
+      });
+    } catch (err) {
+      console.error('Error loading security findings:', err);
+    }
+  }
+
+  // --- DUPLICATES VIEW ---
+  async function loadDuplicatesView() {
+    const projSelect = document.getElementById('duplicates-project-select');
+    populateSelect(projSelect);
+    const projectId = projSelect ? projSelect.value : null;
+    if (!projectId) return;
+
+    try {
+      const clusters = await API.getProjectDuplicates(projectId);
+      const totalClusters = clusters.length;
+      let totalWasted = 0;
+      let totalCopies = 0;
+
+      clusters.forEach((c) => {
+        totalWasted += c.wasted_bytes || 0;
+        totalCopies += c.count || 0;
+      });
+
+      document.getElementById('dup-total-clusters').textContent = totalClusters;
+      document.getElementById('dup-wasted-storage').textContent = formatBytes(totalWasted);
+      document.getElementById('dup-total-copies').textContent = totalCopies;
+
+      const listContainer = document.getElementById('duplicates-clusters-list');
+      listContainer.innerHTML = '';
+
+      if (!clusters.length) {
+        listContainer.innerHTML = `
+          <div class="empty-state-card">
+            <div class="empty-icon">✨</div>
+            <h3>No Duplicate Files Found</h3>
+            <p>Every file in this project has unique content. No redundant storage detected.</p>
+          </div>
+        `;
+        return;
+      }
+
+      clusters.forEach((cl) => {
+        const card = document.createElement('div');
+        card.className = 'dup-cluster-card';
+        const fileItems = (cl.files || [])
+          .map((f) => `<div class="dup-file-item"><span>${escapeHtml(f.relative_path || f.filename)}</span><span>${formatBytes(f.size_bytes)}</span></div>`)
+          .join('');
+
+        card.innerHTML = `
+          <div class="dup-cluster-header">
+            <div>
+              <span class="dup-hash">SHA-256: ${cl.sha256.substring(0, 16)}...</span>
+              <span class="health-meta-badge badge-med" style="margin-left: 8px;">${cl.count} copies</span>
+            </div>
+            <div class="dup-stats">
+              Each: ${formatBytes(cl.size_bytes)} · <strong>Wasted: ${formatBytes(cl.wasted_bytes)}</strong>
+            </div>
+          </div>
+          <div class="dup-file-list">${fileItems}</div>
+        `;
+        listContainer.appendChild(card);
+      });
+    } catch (err) {
+      console.error('Error loading duplicates:', err);
+    }
+  }
+
+  // --- AI MODAL HELPER ---
+  const modalAIInsight = document.getElementById('modal-ai-insight');
+  const modalAITitle = document.getElementById('modal-ai-title');
+  const modalAIBody = document.getElementById('modal-ai-body');
+  let currentAIMarkdown = '';
+
+  function showAIModal(title, initialText) {
+    if (!modalAIInsight) return;
+    modalAITitle.textContent = title;
+    currentAIMarkdown = initialText;
+    modalAIBody.innerHTML = `<p>${escapeHtml(initialText)}</p>`;
+    modalAIInsight.classList.add('active');
+  }
+
+  function renderAIModalContent(markdown) {
+    currentAIMarkdown = markdown;
+    modalAIBody.innerHTML = formatMarkdown(markdown);
+  }
+
+  const closeAIModalBtn = document.getElementById('btn-close-ai-modal');
+  if (closeAIModalBtn) {
+    closeAIModalBtn.addEventListener('click', () => {
+      modalAIInsight.classList.remove('active');
+    });
+  }
+
+  const copyAIInsightBtn = document.getElementById('btn-copy-ai-insight');
+  if (copyAIInsightBtn) {
+    copyAIInsightBtn.addEventListener('click', () => {
+      navigator.clipboard.writeText(currentAIMarkdown);
+      showToast('Copied to clipboard!', 'success');
+    });
+  }
+
+  const discussChatBtn = document.getElementById('btn-discuss-in-chat');
+  if (discussChatBtn) {
+    discussChatBtn.addEventListener('click', () => {
+      modalAIInsight.classList.remove('active');
+      switchPage('aichat');
+      const chatInput = document.getElementById('chat-input');
+      if (chatInput) {
+        chatInput.value = `Explain the key recommendations from the recent project health analysis and help me plan fixes.`;
+        chatInput.focus();
+      }
+    });
+  }
+
+  // --- EVENT LISTENERS FOR HEALTH / SECURITY / DUPLICATES ---
+  const healthSelect = document.getElementById('health-project-select');
+  if (healthSelect) healthSelect.addEventListener('change', loadHealthView);
+
+  const securitySelect = document.getElementById('security-project-select');
+  if (securitySelect) securitySelect.addEventListener('change', loadSecurityView);
+  const secSevFilter = document.getElementById('security-severity-filter');
+  if (secSevFilter) secSevFilter.addEventListener('change', loadSecurityView);
+  const secStatusFilter = document.getElementById('security-status-filter');
+  if (secStatusFilter) secStatusFilter.addEventListener('change', loadSecurityView);
+
+  const dupSelect = document.getElementById('duplicates-project-select');
+  if (dupSelect) dupSelect.addEventListener('change', loadDuplicatesView);
+
+  // Filter pills for recommendations
+  const recFilterGroup = document.getElementById('recommendation-tier-filter');
+  if (recFilterGroup) {
+    recFilterGroup.addEventListener('click', (e) => {
+      if (e.target.classList.contains('pill')) {
+        recFilterGroup.querySelectorAll('.pill').forEach((p) => p.classList.remove('active'));
+        e.target.classList.add('active');
+        activeTierFilter = e.target.dataset.tier;
+        renderRecommendationsList();
+      }
+    });
+  }
+
+  // Run Health Analysis button
+  const runAnalysisBtn = document.getElementById('btn-run-analysis');
+  if (runAnalysisBtn) {
+    runAnalysisBtn.addEventListener('click', async () => {
+      const projSelect = document.getElementById('health-project-select');
+      const projectId = projSelect ? projSelect.value : null;
+      if (!projectId) return showToast('Please select a project first.', 'error');
+
+      runAnalysisBtn.disabled = true;
+      runAnalysisBtn.innerHTML = '<span>⏳ Analyzing Codebase...</span>';
+      showToast('Running project intelligence, health & security analysis...', 'info');
+
+      try {
+        const res = await API.analyzeProject(projectId);
+        showToast(`Analysis completed! Grade ${res.grade} (${res.overall_score}/100)`, 'success');
+        await loadHealthView();
+      } catch (err) {
+        showToast(`Analysis failed: ${err.message}`, 'error');
+      } finally {
+        runAnalysisBtn.disabled = false;
+        runAnalysisBtn.innerHTML = '<span>⚡ Run Health Analysis</span>';
+      }
+    });
+  }
+
+  // Run Security Scan button
+  const secScanBtn = document.getElementById('btn-security-scan');
+  if (secScanBtn) {
+    secScanBtn.addEventListener('click', async () => {
+      const projSelect = document.getElementById('security-project-select');
+      const projectId = projSelect ? projSelect.value : null;
+      if (!projectId) return showToast('Please select a project first.', 'error');
+
+      secScanBtn.disabled = true;
+      secScanBtn.innerHTML = '<span>⏳ Scanning Secrets...</span>';
+      try {
+        await API.analyzeProject(projectId);
+        showToast('Security scan completed successfully!', 'success');
+        await loadSecurityView();
+      } catch (err) {
+        showToast(`Security scan failed: ${err.message}`, 'error');
+      } finally {
+        secScanBtn.disabled = false;
+        secScanBtn.innerHTML = '<span>🛡️ Run Security Scan</span>';
+      }
+    });
+  }
+
+  // Refresh Duplicates button
+  const refreshDupBtn = document.getElementById('btn-refresh-duplicates');
+  if (refreshDupBtn) {
+    refreshDupBtn.addEventListener('click', () => {
+      loadDuplicatesView();
+      showToast('Duplicates view refreshed', 'info');
+    });
+  }
+
+  // AI Summarize button
+  const aiSummarizeBtn = document.getElementById('btn-ai-summarize');
+  if (aiSummarizeBtn) {
+    aiSummarizeBtn.addEventListener('click', async () => {
+      const projSelect = document.getElementById('health-project-select');
+      const projectId = projSelect ? projSelect.value : null;
+      if (!projectId) return showToast('Please select a project first.', 'error');
+
+      showAIModal('Project Executive Summary', 'Analyzing codebase structure, languages, health metrics, and active risks...');
+      try {
+        const res = await API.aiSummarizeProject(projectId);
+        renderAIModalContent(res.content);
+      } catch (err) {
+        renderAIModalContent(`Failed to generate summary: ${err.message}`);
+      }
+    });
+  }
+
+  // AI Plan button
+  const aiPlanBtn = document.getElementById('btn-ai-plan');
+  if (aiPlanBtn) {
+    aiPlanBtn.addEventListener('click', async () => {
+      const projSelect = document.getElementById('health-project-select');
+      const projectId = projSelect ? projSelect.value : null;
+      if (!projectId) return showToast('Please select a project first.', 'error');
+
+      showAIModal('Phased Remediation Plan', 'Formulating phased remediation steps based on prioritized findings...');
+      try {
+        const res = await API.aiImprovementPlan(projectId);
+        renderAIModalContent(res.content);
+      } catch (err) {
+        renderAIModalContent(`Failed to generate remediation plan: ${err.message}`);
+      }
     });
   }
 
