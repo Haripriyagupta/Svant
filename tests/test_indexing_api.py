@@ -94,3 +94,12 @@ def test_api_indexing_and_search_flow(client_env):
     assert res_hyb.status_code == 200
     assert res_hyb.json()["mode"] == "hybrid"
     assert len(res_hyb.json()["results"]) > 0
+
+    # 10. Delete project and verify vector index directory is removed while source files remain
+    from svant.config import settings
+    proj_idx_dir = Path(settings.indexes_dir) / proj_id
+    res_del = client.delete(f"/api/projects/{proj_id}")
+    assert res_del.status_code == 200
+    assert not proj_idx_dir.exists()
+    assert pdir.exists()
+    assert (pdir / "config.json").exists()

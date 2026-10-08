@@ -35,11 +35,21 @@ def chat_with_project(payload: ChatRequest) -> ChatResponse:
     Retrieves evidence locally, redacts secrets locally, and generates answers with citations.
     """
     repo = Repository(get_db())
-    project = repo.get_project(payload.project_id)
+    target_project_id = (payload.project_id or "").strip()
+    if not target_project_id:
+        projects = repo.list_projects()
+        if not projects:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No projects found. Please add and scan a project first before asking SVANT.",
+            )
+        target_project_id = projects[0]["id"]
+
+    project = repo.get_project(target_project_id)
     if not project:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Project '{payload.project_id}' not found.",
+            detail=f"Project '{target_project_id}' not found.",
         )
 
     mode_str = payload.search_mode.lower().strip()
@@ -54,11 +64,13 @@ def chat_with_project(payload: ChatRequest) -> ChatResponse:
 
     try:
         rag_res = pipeline.query(
-            project_id=payload.project_id,
+            project_id=target_project_id,
             message=payload.message,
             search_mode=search_mode,
             top_k=payload.top_k,
             provider_name=payload.provider,
+            conversation_id=payload.conversation_id,
+            history=payload.history,
         )
 
         return ChatResponse(
@@ -68,6 +80,7 @@ def chat_with_project(payload: ChatRequest) -> ChatResponse:
             sources=[CitationItem(**s.to_dict()) for s in rag_res.sources],
             context_count=rag_res.context_count,
             redactions=rag_res.redactions,
+            conversation_id=rag_res.conversation_id,
         )
 
     except ValueError as val_err:

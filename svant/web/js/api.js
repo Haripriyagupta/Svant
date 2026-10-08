@@ -21,7 +21,28 @@ const API = {
         let errMessage = `HTTP error ${response.status}`;
         try {
           const errorJson = await response.json();
-          errMessage = errorJson.detail || errorJson.error || errMessage;
+          if (errorJson.detail) {
+            if (typeof errorJson.detail === 'string') {
+              errMessage = errorJson.detail;
+            } else if (Array.isArray(errorJson.detail)) {
+              errMessage = errorJson.detail
+                .map((d) => {
+                  if (typeof d === 'string') return d;
+                  if (d && typeof d === 'object') {
+                    const loc = Array.isArray(d.loc) ? d.loc.filter((l) => l !== 'body').join('.') : '';
+                    return loc ? `${d.msg || 'Invalid input'} (${loc})` : (d.msg || JSON.stringify(d));
+                  }
+                  return String(d);
+                })
+                .join('; ');
+            } else if (typeof errorJson.detail === 'object') {
+              errMessage = errorJson.detail.message || errorJson.detail.msg || JSON.stringify(errorJson.detail);
+            }
+          } else if (errorJson.error) {
+            errMessage = typeof errorJson.error === 'string' ? errorJson.error : JSON.stringify(errorJson.error);
+          } else if (errorJson.message) {
+            errMessage = typeof errorJson.message === 'string' ? errorJson.message : JSON.stringify(errorJson.message);
+          }
         } catch (_) {}
         throw new Error(errMessage);
       }
@@ -35,6 +56,10 @@ const API = {
 
   getHealth() {
     return this.request('/health');
+  },
+
+  getSettings() {
+    return this.request('/api/settings');
   },
 
   getStats() {
@@ -108,7 +133,7 @@ const API = {
     return this.request('/api/chat/status');
   },
 
-  chat({ message, projectId, searchMode = 'hybrid', topK = 5, provider } = {}) {
+  chat({ message, projectId, searchMode = 'hybrid', topK = 5, provider, conversationId, history } = {}) {
     return this.request('/api/chat', {
       method: 'POST',
       body: JSON.stringify({
@@ -117,11 +142,13 @@ const API = {
         search_mode: searchMode,
         top_k: topK,
         provider: provider || undefined,
+        conversation_id: conversationId || undefined,
+        history: history || undefined,
       }),
     });
   },
 
-  // Phase 4 & 5: Project Intelligence, Health & Security
+  // Project Intelligence, Health, Security & AI Assistant
   analyzeProject(projectId) {
     return this.request(`/api/projects/${projectId}/analyze`, {
       method: 'POST',
@@ -130,6 +157,10 @@ const API = {
 
   getProjectHealth(projectId) {
     return this.request(`/api/projects/${projectId}/health`);
+  },
+
+  getProjectSummary(projectId) {
+    return this.request(`/api/projects/${projectId}/summary`);
   },
 
   getProjectFindings(projectId, { category, severity, status, priorityTier } = {}) {
@@ -171,6 +202,13 @@ const API = {
   aiImprovementPlan(projectId, provider) {
     const qs = provider ? `?provider=${encodeURIComponent(provider)}` : '';
     return this.request(`/api/projects/${projectId}/ai/plan${qs}`, {
+      method: 'POST',
+    });
+  },
+
+  aiOnboardingProject(projectId, provider) {
+    const qs = provider ? `?provider=${encodeURIComponent(provider)}` : '';
+    return this.request(`/api/projects/${projectId}/ai/onboarding${qs}`, {
       method: 'POST',
     });
   },

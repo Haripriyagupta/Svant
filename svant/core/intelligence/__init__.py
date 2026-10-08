@@ -7,6 +7,7 @@ and grounded recommendations.
 from svant.core.intelligence.analyzer import ProjectIntelligenceEngine
 from svant.core.intelligence.dependencies import DependencyAnalyzer
 from svant.core.intelligence.documentation import DocumentationAnalyzer
+from svant.core.intelligence.duplicates import DuplicateDetector
 from svant.core.intelligence.hygiene import HygieneAnalyzer
 from svant.core.intelligence.inventory import ProjectInventoryBuilder
 from svant.core.intelligence.models import (
@@ -27,6 +28,7 @@ from svant.core.intelligence.structure import ProjectStructureAnalyzer
 
 __all__ = [
     "ProjectIntelligenceEngine",
+    "DuplicateDetector",
     "ProjectInventoryBuilder",
     "ProjectStructureAnalyzer",
     "SecurityAnalyzer",

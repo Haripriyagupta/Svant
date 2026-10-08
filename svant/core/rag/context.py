@@ -15,6 +15,26 @@ from svant.logger import get_logger
 logger = get_logger("svant.core.rag.context")
 
 
+from enum import Enum
+
+
+class ContextCategory(str, Enum):
+    PROJECT_OVERVIEW = "PROJECT_OVERVIEW"
+    PROJECT_STRUCTURE = "PROJECT_STRUCTURE"
+    PROJECT_INVENTORY = "PROJECT_INVENTORY"
+    PROJECT_HEALTH = "PROJECT_HEALTH"
+    SECURITY_FINDINGS = "SECURITY_FINDINGS"
+    QUALITY_FINDINGS = "QUALITY_FINDINGS"
+    TESTING_FINDINGS = "TESTING_FINDINGS"
+    DEPENDENCY_FINDINGS = "DEPENDENCY_FINDINGS"
+    DOCUMENTATION_FINDINGS = "DOCUMENTATION_FINDINGS"
+    HYGIENE_FINDINGS = "HYGIENE_FINDINGS"
+    DUPLICATES = "DUPLICATES"
+    RELEVANT_SOURCE_CHUNKS = "RELEVANT_SOURCE_CHUNKS"
+    RELEVANT_DOCUMENT_CHUNKS = "RELEVANT_DOCUMENT_CHUNKS"
+    PROJECT_METADATA = "PROJECT_METADATA"
+
+
 @dataclass
 class ContextItem:
     """Represents a bounded, traceable piece of project evidence."""
@@ -30,6 +50,8 @@ class ContextItem:
     line_start: Optional[int] = None
     line_end: Optional[int] = None
     section: Optional[str] = None
+    category: str = ContextCategory.RELEVANT_SOURCE_CHUNKS.value
+    metadata: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -108,6 +130,16 @@ class ContextAssembler:
                 content = content[:remaining_budget] + "\n... [truncated to fit context budget]"
                 item_len = len(content)
 
+            hit_cat = hit.get("category")
+            if hit_cat == "document":
+                cat = ContextCategory.RELEVANT_DOCUMENT_CHUNKS.value
+            elif hit_cat == "source":
+                cat = ContextCategory.RELEVANT_SOURCE_CHUNKS.value
+            elif hit.get("context_category"):
+                cat = str(hit.get("context_category"))
+            else:
+                cat = ContextCategory.RELEVANT_SOURCE_CHUNKS.value
+
             item = ContextItem(
                 file_id=fid,
                 chunk_id=cid,
@@ -120,6 +152,7 @@ class ContextAssembler:
                 line_start=line_start,
                 line_end=line_end,
                 section=section,
+                category=cat,
             )
             items.append(item)
             accumulated_chars += item_len
@@ -136,7 +169,8 @@ class ContextAssembler:
 
         parts = []
         for idx, item in enumerate(context_items, start=1):
-            header = f"--- [Source {idx}: {item.relative_path} ({item.citation_label}, Relevance: {item.relevance_score:.2f})] ---"
+            cat_label = f" | Category: {item.category}" if getattr(item, "category", None) else ""
+            header = f"--- [Source {idx}: {item.relative_path} ({item.citation_label}{cat_label}, Relevance: {item.relevance_score:.2f})] ---"
             parts.append(f"{header}\n{item.content}\n")
 
         return "\n".join(parts)

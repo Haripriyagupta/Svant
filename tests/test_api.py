@@ -41,6 +41,17 @@ def test_health_endpoint(client: TestClient):
     assert data["database"] == "connected"
 
 
+def test_settings_endpoint(client: TestClient):
+    response = client.get("/api/settings")
+    assert response.status_code == 200
+    data = response.json()
+    assert "data_dir" in data
+    assert "excluded_dirs" in data
+    assert "local_only_mode" in data
+    assert "embedding_model" in data
+    assert "version" in data
+
+
 def test_root_frontend_serves_index(client: TestClient):
     response = client.get("/")
     assert response.status_code == 200

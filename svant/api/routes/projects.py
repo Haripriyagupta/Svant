@@ -2,10 +2,12 @@
 Projects management endpoints for SVANT.
 """
 
+import shutil
 from pathlib import Path
 from typing import List
 from fastapi import APIRouter, HTTPException, status
 from svant.api.schemas import ProjectCreateRequest, ProjectResponse, ScanResultResponse
+from svant.config import settings
 from svant.core.scanner import FileScanner
 from svant.db.connection import get_db
 from svant.db.repository import Repository
@@ -139,6 +141,14 @@ def delete_project(project_id: str) -> dict:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to remove project from database.",
         )
+
+    # Clean up project's local vector index files if present
+    try:
+        project_index_dir = Path(settings.indexes_dir) / project_id
+        if project_index_dir.is_dir():
+            shutil.rmtree(project_index_dir, ignore_errors=True)
+    except Exception as clean_err:
+        logger.warning(f"Failed to remove vector index directory for project {project_id}: {clean_err}")
 
     logger.info(f"Removed project '{project['name']}' from SVANT tracking (disk untouched).")
     return {"status": "success", "message": f"Project '{project['name']}' untracked successfully."}

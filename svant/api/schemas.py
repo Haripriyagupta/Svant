@@ -16,6 +16,24 @@ class HealthResponse(BaseModel):
     data_dir: str
 
 
+class SettingsResponse(BaseModel):
+    version: str = "0.2.0"
+    data_dir: str
+    db_path: str
+    log_dir: str
+    indexes_dir: str
+    models_dir: str
+    excluded_dirs: List[str]
+    local_only_mode: bool
+    ai_provider: str
+    gemini_configured: bool
+    gemini_model: str
+    embedding_model: str
+    rag_top_k: int
+    hybrid_semantic_weight: float
+    hybrid_keyword_weight: float
+
+
 class ProjectCreateRequest(BaseModel):
     path: str = Field(..., description="Local filesystem path to the project root folder")
     name: Optional[str] = Field(None, description="Optional custom display name for the project")
@@ -141,11 +159,13 @@ class CitationItem(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    project_id: str = Field(..., description="Project ID to query")
+    project_id: Optional[str] = Field(None, description="Project ID to query (falls back to default active project if omitted)")
     message: str = Field(..., min_length=1, description="User question or prompt")
     search_mode: str = Field("hybrid", description="Retrieval mode: hybrid, semantic, keyword")
     top_k: Optional[int] = Field(None, ge=1, le=25, description="Number of context items to retrieve")
     provider: Optional[str] = Field(None, description="Optional provider override: local, gemini, mock")
+    conversation_id: Optional[str] = Field(None, description="Lightweight conversation session ID")
+    history: Optional[List[Dict[str, str]]] = Field(None, description="Recent conversation history turns")
 
 
 class ChatResponse(BaseModel):
@@ -155,6 +175,7 @@ class ChatResponse(BaseModel):
     sources: List[CitationItem]
     context_count: int
     redactions: int
+    conversation_id: Optional[str] = None
 
 
 class AIStatusResponse(BaseModel):
@@ -212,11 +233,20 @@ class RecommendationsResponse(BaseModel):
 
 
 class DuplicateClusterResponse(BaseModel):
-    sha256: str
-    size_bytes: int
-    count: int
-    wasted_bytes: int
-    files: List[Dict[str, Any]]
+    sha256: Optional[str] = None
+    size_bytes: int = 0
+    file_size: Optional[int] = None
+    count: int = 2
+    file_count: Optional[int] = None
+    wasted_bytes: int = 0
+    duplicate_type: str = "exact"
+    cluster_type: str = "exact"
+    similarity: float = 1.0
+    similarity_pct: int = 100
+    difference_summary: Optional[str] = None
+    reason: Optional[str] = None
+    primary_file: Optional[Dict[str, Any]] = None
+    files: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class AIActionResponse(BaseModel):
@@ -224,5 +254,21 @@ class AIActionResponse(BaseModel):
     action: str
     content: str
     provider: str
+    sources: Optional[List[CitationItem]] = None
+
+
+class ProjectSummaryResponse(BaseModel):
+    project_id: str
+    name: str
+    root_path: str
+    primary_ecosystem: str
+    total_files: int
+    total_size_bytes: int
+    languages: Dict[str, int]
+    entry_points: List[str]
+    health_score: Optional[int] = None
+    grade: Optional[str] = None
+    health_summary: Optional[str] = None
+    findings_counts: Dict[str, int]
 
 

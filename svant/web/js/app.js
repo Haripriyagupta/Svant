@@ -1,6 +1,6 @@
 /**
  * SVANT Desktop Web Application Logic
- * Coordinates UI state, views, actions, and real-time backend updates.
+ * Modern, clean, and beginner-accessible interface.
  */
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -8,12 +8,17 @@ document.addEventListener('DOMContentLoaded', () => {
   const state = {
     currentPage: 'dashboard',
     projects: [],
+    activeProjectId: '',
     stats: null,
     files: [],
     selectedProjectForFiles: '',
     selectedCategoryForFiles: '',
     searchMode: 'keyword',
     projectStatuses: {},
+    conversationId: null,
+    chatHistory: [],
+    settings: null,
+    duplicateClusters: [],
   };
 
   // DOM Elements
@@ -26,6 +31,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Modals
   const modalAddProject = document.getElementById('modal-add-project');
   const modalFileDetail = document.getElementById('modal-file-detail');
+  const modalCompareFiles = document.getElementById('modal-compare-files');
 
   // Formatters
   function formatBytes(bytes) {
@@ -51,7 +57,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // Toast Notification
+  // Toast Notifications
   function showToast(message, type = 'info') {
     const toast = document.createElement('div');
     toast.className = `toast ${type}`;
@@ -59,22 +65,142 @@ document.addEventListener('DOMContentLoaded', () => {
     toastContainer.appendChild(toast);
     setTimeout(() => {
       toast.style.opacity = '0';
-      toast.style.transform = 'translateY(8px)';
-      setTimeout(() => toast.remove(), 200);
-    }, 3500);
+      toast.style.transform = 'translateY(6px)';
+      setTimeout(() => toast.remove(), 250);
+    }, 3800);
   }
 
-  // Navigation Logic
+  // Helper: HTML Escaper
+  function escapeHtml(str) {
+    if (!str) return '';
+    return str
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
+  function escapeJs(str) {
+    if (!str) return '';
+    return str.replace(/'/g, "\\'").replace(/"/g, '\\"');
+  }
+
+  // Markdown Parser for Assistant Responses and Insight Modals
+  function formatMarkdown(rawText) {
+    if (rawText === null || rawText === undefined) return '';
+    if (typeof rawText !== 'string') {
+      if (typeof rawText === 'object') {
+        if (typeof rawText.answer === 'string') rawText = rawText.answer;
+        else if (typeof rawText.text === 'string') rawText = rawText.text;
+        else if (typeof rawText.message === 'string') rawText = rawText.message;
+        else if (typeof rawText.content === 'string') rawText = rawText.content;
+        else rawText = JSON.stringify(rawText, null, 2);
+      } else {
+        rawText = String(rawText);
+      }
+    }
+    const lines = rawText.split('\n');
+    let html = '';
+    let inList = false;
+    let listType = 'ul';
+
+    for (let i = 0; i < lines.length; i++) {
+      let line = lines[i];
+
+      // Code blocks ```code```
+      if (line.startsWith('```')) {
+        let codeContent = '';
+        i++;
+        while (i < lines.length && !lines[i].startsWith('```')) {
+          codeContent += escapeHtml(lines[i]) + '\n';
+          i++;
+        }
+        if (inList) { html += `</${listType}>`; inList = false; }
+        html += `<pre><code>${codeContent}</code></pre>`;
+        continue;
+      }
+
+      // Headings
+      if (line.startsWith('### ')) {
+        if (inList) { html += `</${listType}>`; inList = false; }
+        html += `<h4>${formatInline(line.substring(4))}</h4>`;
+        continue;
+      }
+      if (line.startsWith('## ')) {
+        if (inList) { html += `</${listType}>`; inList = false; }
+        html += `<h3>${formatInline(line.substring(3))}</h3>`;
+        continue;
+      }
+      if (line.startsWith('# ')) {
+        if (inList) { html += `</${listType}>`; inList = false; }
+        html += `<h2>${formatInline(line.substring(2))}</h2>`;
+        continue;
+      }
+
+      // Unordered lists
+      if (line.match(/^[\*\-]\s+(.*)$/)) {
+        const itemText = line.replace(/^[\*\-]\s+/, '');
+        if (!inList || listType !== 'ul') {
+          if (inList) html += `</${listType}>`;
+          html += '<ul>';
+          inList = true;
+          listType = 'ul';
+        }
+        html += `<li>${formatInline(itemText)}</li>`;
+        continue;
+      }
+
+      // Ordered lists
+      if (line.match(/^\d+\.\s+(.*)$/)) {
+        const itemText = line.replace(/^\d+\.\s+/, '');
+        if (!inList || listType !== 'ol') {
+          if (inList) html += `</${listType}>`;
+          html += '<ol>';
+          inList = true;
+          listType = 'ol';
+        }
+        html += `<li>${formatInline(itemText)}</li>`;
+        continue;
+      }
+
+      // Empty line closes lists
+      if (!line.trim()) {
+        if (inList) { html += `</${listType}>`; inList = false; }
+        continue;
+      }
+
+      // Regular paragraph
+      if (inList) { html += `</${listType}>`; inList = false; }
+      html += `<p>${formatInline(line)}</p>`;
+    }
+
+    if (inList) { html += `</${listType}>`; }
+    return html;
+  }
+
+  function formatInline(text) {
+    let s = escapeHtml(text);
+    // Bold **text**
+    s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    // Italic *text*
+    s = s.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+    // Inline code `code`
+    s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
+    return s;
+  }
+
+  // Navigation Titles
   const pageTitles = {
-    dashboard: { title: 'System Dashboard', subtitle: 'Real-time local file intelligence & tracked repositories' },
-    projects: { title: 'Tracked Projects', subtitle: 'Manage local folders, trigger scans, and inspect disk status' },
-    files: { title: 'Indexed Files', subtitle: 'Explore scanned project files, metadata, and extracted text' },
-    search: { title: 'Knowledge Search', subtitle: 'High-speed local keyword search via SQLite FTS5 engine' },
-    security: { title: 'Security & Secret Shield', subtitle: 'Static credential scanning, dangerous config detection, and zero-exposure masking' },
-    duplicates: { title: 'Duplicate File Analysis', subtitle: 'SHA-256 hash-based identical file discovery and storage reclamation' },
-    health: { title: 'Project Health & Architecture', subtitle: 'Explainable SVANT Health Score (0-100), component weights, and prioritized fixes' },
-    aichat: { title: 'Grounded AI Assistant', subtitle: 'Privacy-aware project Q&A with strict context grounding & citations' },
-    settings: { title: 'Preferences', subtitle: 'Configuration and storage path settings (Roadmap Phase 7)' },
+    dashboard: { title: 'Project Overview', subtitle: 'Real-time summary of your local projects and files.' },
+    projects: { title: 'Your Projects', subtitle: 'Tracked workspaces and repositories on your computer.' },
+    files: { title: 'Project Files', subtitle: 'Explore scanned project files, text, and documents.' },
+    search: { title: 'Search Your Projects', subtitle: 'Find information across code, documentation, and notes.' },
+    security: { title: 'Security Problems', subtitle: 'Problems that could expose private keys, passwords, or risky settings.' },
+    duplicates: { title: 'Duplicate Files', subtitle: 'Find files that have identical content and reclaim storage space.' },
+    health: { title: 'Project Health', subtitle: 'See how healthy your project is and what you can improve.' },
+    aichat: { title: 'SVANT Assistant', subtitle: 'Ask questions about your project in plain language.' },
+    settings: { title: 'Settings', subtitle: 'Customize how SVANT works on your computer.' },
   };
 
   function switchPage(pageId) {
@@ -103,6 +229,7 @@ document.addEventListener('DOMContentLoaded', () => {
       updateAIStatusBadge();
       if (!state.projects.length) loadDashboardData();
     }
+    if (pageId === 'settings') loadSettingsView();
   }
 
   navItems.forEach((btn) => {
@@ -122,14 +249,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
       if (data.status === 'ok') {
         dot.className = 'status-indicator live';
-        label.textContent = `Backend Live (v${data.version})`;
+        label.textContent = 'SVANT is Active';
         dataDirTag.textContent = data.data_dir;
       }
     } catch (_) {
       const dot = document.getElementById('status-dot');
       const label = document.getElementById('status-label');
       dot.className = 'status-indicator error';
-      label.textContent = 'Backend Offline';
+      label.textContent = 'SVANT Offline';
     }
   }
 
@@ -143,11 +270,11 @@ document.addEventListener('DOMContentLoaded', () => {
       // Update counters
       document.getElementById('stat-projects').textContent = stats.total_projects;
       document.getElementById('stat-files').textContent = stats.total_files.toLocaleString();
-      document.getElementById('stat-files-size').textContent = `${formatBytes(stats.total_size_bytes)} Total Storage`;
-      document.getElementById('stat-indexed').textContent = `${stats.total_indexed_files.toLocaleString()} (${stats.total_chunks || 0} chunks)`;
+      document.getElementById('stat-files-size').textContent = `${formatBytes(stats.total_size_bytes)} total space`;
+      document.getElementById('stat-indexed').textContent = `${stats.total_indexed_files.toLocaleString()} files`;
       document.getElementById('stat-last-scan').textContent = stats.last_scanned_at
-        ? `Last scan: ${formatDate(stats.last_scanned_at)}`
-        : 'No scans completed';
+        ? `Last checked: ${formatDate(stats.last_scanned_at)}`
+        : 'No scans completed yet';
 
       // Update badges
       document.getElementById('nav-project-count').textContent = stats.total_projects;
@@ -156,20 +283,25 @@ document.addEventListener('DOMContentLoaded', () => {
       // Render mini project list
       const miniList = document.getElementById('dashboard-projects-list');
       if (projects.length === 0) {
-        miniList.innerHTML = `<div class="empty-state">No projects tracked yet. Click "Track New Project" above.</div>`;
+        miniList.innerHTML = `<div class="empty-state">No projects added yet. Click "Track New Project" above to get started.</div>`;
       } else {
+        const folderColors = ['purple', 'green', 'yellow', 'blue'];
         miniList.innerHTML = projects
           .slice(0, 5)
           .map(
-            (p) => `
+            (p, idx) => `
           <div class="mini-project-item">
+            <div class="mini-proj-icon ${folderColors[idx % 4]}">📁</div>
             <div class="mini-proj-info">
               <h4>${escapeHtml(p.name)}</h4>
               <p>${escapeHtml(p.root_path)}</p>
             </div>
             <div class="mini-proj-meta">
               <span class="badge">${p.file_count} files</span>
-              <button class="btn btn-secondary btn-sm" onclick="window.triggerScan('${p.id}')">Scan</button>
+              <button class="btn btn-scan-pill btn-sm" onclick="window.triggerScan('${p.id}')">
+                <svg class="btn-icon" viewBox="0 0 24 24"><path d="M4 4h4v2H6v2H4V4zm16 0h-4v2h2v2h2V4zM4 20h4v-2H6v-2H4v4zm16 0h-4v-2h2v-2h2v4zM8 8h8v8H8V8z"/></svg>
+                <span>Scan</span>
+              </button>
             </div>
           </div>
         `
@@ -182,21 +314,31 @@ document.addEventListener('DOMContentLoaded', () => {
       const categories = stats.categories || {};
       const entries = Object.entries(categories);
 
+      const categoryLabels = {
+        binary: 'Binary',
+        config: 'Config',
+        data: 'Data',
+        document: 'Document',
+        other: 'Other',
+        source: 'Source',
+      };
+
       if (entries.length === 0) {
-        catBox.innerHTML = `<div class="empty-state">Scan a project to analyze file distribution.</div>`;
+        catBox.innerHTML = `<div class="empty-state">Add and check a project to see file types and distribution.</div>`;
       } else {
         const total = stats.total_files || 1;
         catBox.innerHTML = entries
           .map(([cat, data]) => {
             const pct = Math.round((data.count / total) * 100);
+            const label = categoryLabels[cat] || cat;
             return `
-            <div class="category-row">
+            <div class="category-row cat-${cat}" data-cat="${cat}">
               <div class="category-meta">
-                <span class="category-name">${cat} (${data.count})</span>
+                <span class="category-name"><span class="cat-dot cat-${cat}"></span>${label} (${data.count})</span>
                 <span class="category-stats">${formatBytes(data.size)} · ${pct}%</span>
               </div>
               <div class="progress-track">
-                <div class="progress-fill" style="width: ${pct}%"></div>
+                <div class="progress-fill cat-${cat}" style="width: ${pct}%"></div>
               </div>
             </div>
           `;
@@ -204,7 +346,7 @@ document.addEventListener('DOMContentLoaded', () => {
           .join('');
       }
     } catch (err) {
-      showToast(`Failed to load dashboard: ${err.message}`, 'error');
+      showToast(`Failed to load project overview: ${err.message}`, 'error');
     }
   }
 
@@ -235,7 +377,13 @@ document.addEventListener('DOMContentLoaded', () => {
   function renderProjectsGrid(projects) {
     const grid = document.getElementById('projects-grid');
     if (projects.length === 0) {
-      grid.innerHTML = `<div class="empty-state" style="grid-column: 1/-1;">No projects tracked yet. Click "Track New Project" to get started.</div>`;
+      grid.innerHTML = `
+        <div class="empty-state-card" style="grid-column: 1/-1;">
+          <div class="empty-icon">📁</div>
+          <h3>No Projects Added Yet</h3>
+          <p>Add your first local project folder to search code, check security, and inspect project health.</p>
+        </div>
+      `;
       return;
     }
 
@@ -243,12 +391,11 @@ document.addEventListener('DOMContentLoaded', () => {
       .map((p) => {
         const idxInfo = state.projectStatuses[p.id] || { status: 'not_indexed', total_chunks: 0, total_vectors: 0 };
         const idxLabel = idxInfo.status === 'indexed'
-          ? `Indexed (${idxInfo.total_chunks} chunks)`
+          ? `Analyzed (${idxInfo.total_chunks} sections)`
           : idxInfo.status === 'indexing'
-          ? 'Indexing...'
-          : 'Not Indexed';
+          ? 'Analyzing...'
+          : 'Not Analyzed';
         const idxClass = idxInfo.status === 'indexed' ? 'document' : idxInfo.status === 'indexing' ? 'source' : 'binary';
-
         const isIndexing = idxInfo.status === 'indexing';
 
         return `
@@ -259,8 +406,8 @@ document.addEventListener('DOMContentLoaded', () => {
             <div class="project-path" title="${escapeHtml(p.root_path)}">${escapeHtml(p.root_path)}</div>
           </div>
           <div style="display: flex; gap: 6px; align-items: center;">
-            <span class="tag-cat ${p.status === 'ready' ? 'document' : 'binary'}">${p.status}</span>
-            <span class="tag-cat ${idxClass}" title="Semantic Vector Index Status">${idxLabel}</span>
+            <span class="tag-cat ${p.status === 'ready' ? 'document' : 'binary'}">${p.status === 'ready' ? 'Ready' : p.status}</span>
+            <span class="tag-cat ${idxClass}">${idxLabel}</span>
           </div>
         </div>
 
@@ -274,21 +421,21 @@ document.addEventListener('DOMContentLoaded', () => {
             <span class="proj-stat-val">${formatBytes(p.total_size_bytes)}</span>
           </div>
           <div class="proj-stat-item">
-            <span class="proj-stat-label">Vectors</span>
+            <span class="proj-stat-label">Sections</span>
             <span class="proj-stat-val">${(idxInfo.total_vectors || 0).toLocaleString()}</span>
           </div>
           <div class="proj-stat-item">
-            <span class="proj-stat-label">Last Scan</span>
+            <span class="proj-stat-label">Last Check</span>
             <span class="proj-stat-val" style="font-size: 11.5px;">${formatDate(p.last_scanned_at)}</span>
           </div>
         </div>
 
         <div class="project-actions">
-          <button class="btn btn-secondary btn-sm" onclick="window.viewProjectFiles('${p.id}')">Files</button>
-          <button class="btn btn-secondary btn-sm" onclick="window.triggerScan('${p.id}')" title="Scan disk and extract text">Scan</button>
-          <button class="btn btn-primary btn-sm" onclick="window.triggerIndex('${p.id}')" ${isIndexing ? 'disabled' : ''} title="Chunk and embed text for semantic search">${isIndexing ? 'Indexing...' : 'Index'}</button>
-          <button class="btn btn-ghost btn-sm" onclick="window.triggerReindex('${p.id}')" ${isIndexing ? 'disabled' : ''} title="Force rebuild FAISS vector index">Re-index</button>
-          <button class="btn btn-danger btn-sm" onclick="window.confirmUntrack('${p.id}', '${escapeJs(p.name)}')">Untrack</button>
+          <button class="btn btn-secondary btn-sm" onclick="window.viewProjectFiles('${p.id}')">View Files</button>
+          <button class="btn btn-secondary btn-sm" onclick="window.triggerScan('${p.id}')" title="Read folder and extract text">Check Files</button>
+          <button class="btn btn-primary btn-sm" onclick="window.triggerIndex('${p.id}')" ${isIndexing ? 'disabled' : ''} title="Prepare sections for search and AI">${isIndexing ? 'Analyzing...' : 'Update Search Info'}</button>
+          <button class="btn btn-ghost btn-sm" onclick="window.triggerReindex('${p.id}')" ${isIndexing ? 'disabled' : ''} title="Rebuild search data from scratch">Reset Search Info</button>
+          <button class="btn btn-danger btn-sm" onclick="window.confirmUntrack('${p.id}', '${escapeJs(p.name)}')">Remove</button>
         </div>
       </div>
     `;
@@ -297,38 +444,77 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function updateProjectFilterDropdowns(projects) {
+    if (!state.activeProjectId && projects.length > 0) {
+      state.activeProjectId = projects[0].id;
+    } else if (state.activeProjectId && !projects.some((p) => p.id === state.activeProjectId)) {
+      state.activeProjectId = projects.length ? projects[0].id : '';
+    }
+
     const fileSelect = document.getElementById('file-filter-project');
     const searchSelect = document.getElementById('search-project-select');
     const chatSelect = document.getElementById('chat-project-select');
+    const healthSelect = document.getElementById('health-project-select');
+    const secSelect = document.getElementById('security-project-select');
+    const dupSelect = document.getElementById('duplicates-project-select');
 
-    const options = [
+    const optionsWithAll = [
       '<option value="">All Projects</option>',
       ...projects.map((p) => `<option value="${p.id}">${escapeHtml(p.name)}</option>`),
     ].join('');
 
-    if (fileSelect) fileSelect.innerHTML = options;
-    if (searchSelect) searchSelect.innerHTML = ['<option value="">Across All Tracked Projects</option>', ...projects.map((p) => `<option value="${p.id}">${escapeHtml(p.name)}</option>`)].join('');
-    if (chatSelect) chatSelect.innerHTML = ['<option value="">All Indexed Projects</option>', ...projects.map((p) => `<option value="${p.id}">${escapeHtml(p.name)}</option>`)].join('');
+    const optionsForTracked = [
+      '<option value="">Across All Tracked Projects</option>',
+      ...projects.map((p) => `<option value="${p.id}">${escapeHtml(p.name)}</option>`),
+    ].join('');
+
+    const specificOptions = projects.length > 0
+      ? projects.map((p) => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('')
+      : '<option value="">No projects added yet</option>';
+
+    if (fileSelect) {
+      fileSelect.innerHTML = optionsWithAll;
+      if (state.selectedProjectForFiles) fileSelect.value = state.selectedProjectForFiles;
+    }
+    if (searchSelect) {
+      searchSelect.innerHTML = optionsForTracked;
+      if (state.activeProjectId) searchSelect.value = state.activeProjectId;
+    }
+    if (chatSelect) {
+      chatSelect.innerHTML = specificOptions;
+      if (state.activeProjectId) chatSelect.value = state.activeProjectId;
+    }
+    if (healthSelect) {
+      healthSelect.innerHTML = specificOptions;
+      if (state.activeProjectId) healthSelect.value = state.activeProjectId;
+    }
+    if (secSelect) {
+      secSelect.innerHTML = specificOptions;
+      if (state.activeProjectId) secSelect.value = state.activeProjectId;
+    }
+    if (dupSelect) {
+      dupSelect.innerHTML = specificOptions;
+      if (state.activeProjectId) dupSelect.value = state.activeProjectId;
+    }
   }
 
   // Scan Action
   window.triggerScan = async function (projectId) {
-    showToast('Starting file scan & text extraction...', 'info');
+    showToast('Reading project files & extracting text...', 'info');
     try {
       const res = await API.scanProject(projectId);
-      showToast(`Scan complete: ${res.total_scanned} files (${res.indexed_count} indexed) in ${res.duration_seconds}s`, 'success');
+      showToast(`Finished checking: ${res.total_scanned} files processed in ${res.duration_seconds}s`, 'success');
       loadDashboardData();
       if (state.currentPage === 'projects') loadProjectsView();
       if (state.currentPage === 'files') loadFilesView();
     } catch (err) {
-      showToast(`Scan failed: ${err.message}`, 'error');
+      showToast(`Check failed: ${err.message}`, 'error');
     }
   };
 
-  // Index Action (Phase 2 Local Intelligence)
+  // Index Action
   window.triggerIndex = async function (projectId) {
     if (state.projectStatuses[projectId]?.status === 'indexing') {
-      showToast('Indexing is already in progress for this project.', 'warning');
+      showToast('This project is already being analyzed.', 'warning');
       return;
     }
     state.projectStatuses[projectId] = {
@@ -337,41 +523,38 @@ document.addEventListener('DOMContentLoaded', () => {
     };
     if (state.currentPage === 'projects') renderProjectsGrid(state.projects);
 
-    showToast('Starting semantic indexing (chunking & embeddings)...', 'info');
+    showToast('Analyzing project sections for search...', 'info');
     try {
       const res = await API.indexProject(projectId);
       showToast(
-        `Indexing complete: ${res.indexed_files} indexed (${res.total_chunks} chunks, ${res.total_vectors} vectors) in ${res.duration_seconds}s`,
+        `Search info updated: ${res.indexed_files} files (${res.total_chunks} sections analyzed) in ${res.duration_seconds}s`,
         'success'
       );
     } catch (err) {
-      showToast(`Indexing failed: ${err.message}`, 'error');
+      showToast(`Update failed: ${err.message}`, 'error');
     } finally {
       loadDashboardData();
       if (state.currentPage === 'projects') loadProjectsView();
     }
   };
 
-  // Re-index Action (Force rebuild)
+  // Re-index Action
   window.triggerReindex = async function (projectId) {
     if (state.projectStatuses[projectId]?.status === 'indexing') {
-      showToast('Indexing is already in progress for this project.', 'warning');
+      showToast('This project is already being analyzed.', 'warning');
       return;
     }
-    if (!confirm('Rebuilding the index will wipe current vectors and re-chunk/re-embed all files from scratch. Proceed?')) return;
+    if (!confirm('This will rebuild search information from scratch for this project. Your original files on your computer will not be touched. Proceed?')) return;
     state.projectStatuses[projectId] = {
       ...(state.projectStatuses[projectId] || {}),
       status: 'indexing',
     };
     if (state.currentPage === 'projects') renderProjectsGrid(state.projects);
 
-    showToast('Force rebuilding vector index...', 'info');
+    showToast('Rebuilding search information...', 'info');
     try {
       const res = await API.rebuildIndex(projectId);
-      showToast(
-        `Index rebuilt: ${res.total_chunks} chunks and ${res.total_vectors} vectors in ${res.duration_seconds}s`,
-        'success'
-      );
+      showToast(`Search info rebuilt: ${res.total_chunks} sections ready in ${res.duration_seconds}s`, 'success');
     } catch (err) {
       showToast(`Rebuild failed: ${err.message}`, 'error');
     } finally {
@@ -380,28 +563,34 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
-  // Untrack Project
+  // Remove Project
   window.confirmUntrack = async function (projectId, name) {
-    const ok = confirm(`Remove "${name}" from SVANT tracking?\n\nNote: Original files on your disk will NOT be touched or deleted.`);
+    const ok = confirm(`Remove "${name}" from SVANT?\n\nNote: Original files on your computer will NOT be deleted or touched.`);
     if (!ok) return;
 
     try {
       await API.deleteProject(projectId);
-      showToast(`Untracked project "${name}". Files on disk are untouched.`, 'info');
+      if (state.activeProjectId === projectId) {
+        state.activeProjectId = '';
+      }
+      if (state.selectedProjectForFiles === projectId) {
+        state.selectedProjectForFiles = '';
+      }
+      showToast(`Removed "${name}" from SVANT. Files on your computer were untouched.`, 'info');
       loadProjectsView();
       loadDashboardData();
     } catch (err) {
-      showToast(`Failed to untrack: ${err.message}`, 'error');
+      showToast(`Failed to remove project: ${err.message}`, 'error');
     }
   };
 
   // Explore Files for Project
   window.viewProjectFiles = function (projectId) {
+    state.activeProjectId = projectId;
     state.selectedProjectForFiles = projectId;
-    switchPage('files');
     const select = document.getElementById('file-filter-project');
     if (select) select.value = projectId;
-    loadFilesView();
+    switchPage('files');
   };
 
   // Files View
@@ -426,9 +615,18 @@ document.addEventListener('DOMContentLoaded', () => {
   function renderFilesTable(files) {
     const tbody = document.getElementById('files-table-body');
     if (files.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="8" class="text-center empty-cell" style="padding: 24px; text-align: center; color: var(--text-dim);">No files matched the current filters.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="8" class="text-center empty-cell" style="padding: 32px; text-align: center; color: var(--text-dim);">No files matched the current filters.</td></tr>`;
       return;
     }
+
+    const categoryLabels = {
+      source: 'Source Code',
+      document: 'Document',
+      config: 'Config',
+      data: 'Data',
+      binary: 'Binary',
+      other: 'Other',
+    };
 
     tbody.innerHTML = files
       .map(
@@ -436,12 +634,12 @@ document.addEventListener('DOMContentLoaded', () => {
       <tr>
         <td style="font-weight: 600;">${escapeHtml(f.filename)}</td>
         <td style="color: var(--text-muted);">${escapeHtml(f.project_name || 'Project')}</td>
-        <td style="font-family: var(--font-mono); font-size: 11px; color: var(--text-dim);">${escapeHtml(f.relative_path)}</td>
-        <td><span class="tag-cat ${f.category}">${f.category}</span></td>
-        <td style="font-family: var(--font-mono); font-size: 11px;">${formatBytes(f.size_bytes)}</td>
+        <td style="font-family: var(--font-mono); font-size: 11.5px; color: var(--text-dim);">${escapeHtml(f.relative_path)}</td>
+        <td><span class="tag-cat ${f.category}">${categoryLabels[f.category] || f.category}</span></td>
+        <td style="font-family: var(--font-mono); font-size: 11.5px;">${formatBytes(f.size_bytes)}</td>
         <td style="font-size: 11.5px; color: var(--text-dim);">${formatDate(f.modified_time)}</td>
-        <td><span class="tag-cat ${f.indexed_status === 'indexed' ? 'document' : 'other'}">${f.indexed_status}</span></td>
-        <td><button class="btn btn-ghost btn-sm" onclick="window.viewFileDetail('${f.id}')">Inspect</button></td>
+        <td><span class="tag-cat ${f.indexed_status === 'indexed' ? 'document' : 'other'}">${f.indexed_status === 'indexed' ? 'Analyzed' : 'Not Analyzed'}</span></td>
+        <td><button class="btn btn-ghost btn-sm" onclick="window.viewFileDetail('${f.id}')">View Details</button></td>
       </tr>
     `
       )
@@ -457,9 +655,9 @@ document.addEventListener('DOMContentLoaded', () => {
       document.getElementById('meta-file-size').textContent = `${formatBytes(detail.size_bytes)} (${detail.size_bytes} bytes)`;
       document.getElementById('meta-file-cat').textContent = `${detail.category} (${detail.extension})`;
       document.getElementById('meta-file-mtime').textContent = formatDate(detail.modified_time);
-      document.getElementById('meta-file-extstatus').textContent = detail.extraction_status || 'not extracted';
+      document.getElementById('meta-file-extstatus').textContent = detail.extraction_status === 'completed' ? 'Successfully Extracted' : (detail.extraction_status || 'Not extracted');
       document.getElementById('meta-file-sha').textContent = detail.sha256 ? detail.sha256.substring(0, 16) + '...' : 'N/A';
-      document.getElementById('preview-char-count').textContent = `${(detail.char_count || 0).toLocaleString()} characters`;
+      document.getElementById('preview-char-count').textContent = `${(detail.char_count || 0).toLocaleString()} characters extracted`;
       document.getElementById('modal-file-content').textContent = detail.content_preview || '(No text extracted or file is binary)';
       modalFileDetail.classList.add('active');
     } catch (err) {
@@ -468,21 +666,40 @@ document.addEventListener('DOMContentLoaded', () => {
   };
 
   // Search View & Mode Switching
-  state.searchMode = 'keyword';
+  state.searchMode = localStorage.getItem('svant_default_search') || 'hybrid';
   const modeTabs = document.querySelectorAll('.mode-tab');
+  const searchModeExplainer = document.getElementById('search-mode-desc');
+
+  const modeExplainers = {
+    keyword: '<strong>Search by Words:</strong> Finds exact words and phrases in your files.',
+    semantic: '<strong>Search by Meaning:</strong> Finds related ideas and concepts even when different words are used.',
+    hybrid: '<strong>Smart Search:</strong> Combines exact words and meaning for the best overall results.',
+  };
+
+  const modePlaceholders = {
+    keyword: 'Type exact words or phrases to search...',
+    semantic: 'Search by meaning (e.g. "how are passwords stored?")...',
+    hybrid: 'Type what you are looking for with smart search...',
+  };
+
+  // Sync initial tab and explainer with default preference
+  modeTabs.forEach((t) => {
+    t.classList.toggle('active', t.dataset.mode === state.searchMode);
+  });
+  const initialQInput = document.getElementById('search-query-input');
+  if (initialQInput) initialQInput.placeholder = modePlaceholders[state.searchMode] || 'Type what you are looking for...';
+  if (searchModeExplainer) searchModeExplainer.innerHTML = modeExplainers[state.searchMode] || '';
+
   modeTabs.forEach((tab) => {
     tab.addEventListener('click', () => {
       modeTabs.forEach((t) => t.classList.remove('active'));
       tab.classList.add('active');
-      state.searchMode = tab.dataset.mode || 'keyword';
+      state.searchMode = tab.dataset.mode || 'hybrid';
 
       const qInput = document.getElementById('search-query-input');
-      if (state.searchMode === 'semantic') {
-        qInput.placeholder = 'Natural language semantic search (FAISS dense vector embeddings)...';
-      } else if (state.searchMode === 'hybrid') {
-        qInput.placeholder = 'Hybrid search combining full-text keywords and semantic vector relevance...';
-      } else {
-        qInput.placeholder = 'Search exact keywords (SQLite FTS5 full-text engine)...';
+      qInput.placeholder = modePlaceholders[state.searchMode] || 'Type what you are looking for...';
+      if (searchModeExplainer) {
+        searchModeExplainer.innerHTML = modeExplainers[state.searchMode] || '';
       }
 
       if (qInput.value.trim()) {
@@ -498,18 +715,23 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const query = queryInput.value.trim();
     if (!query) {
-      showToast('Please enter search terms', 'info');
+      showToast('Please type something to search for.', 'info');
       return;
     }
 
     const currentMode = state.searchMode || 'keyword';
-    const modeLabels = {
-      keyword: 'SQLite FTS5 BM25',
-      semantic: 'FAISS Dense Vectors',
-      hybrid: 'FTS5 + FAISS Hybrid Fusion',
+    const friendlyModeLabels = {
+      keyword: 'Search by Words',
+      semantic: 'Search by Meaning',
+      hybrid: 'Smart Search',
     };
 
-    container.innerHTML = `<div class="search-initial-state"><div class="hint-icon">⚡</div><h3>Searching ${modeLabels[currentMode]}...</h3></div>`;
+    container.innerHTML = `
+      <div class="search-initial-state">
+        <div class="hint-icon">⚡</div>
+        <h3>Searching files with ${friendlyModeLabels[currentMode]}...</h3>
+      </div>
+    `;
 
     try {
       const res = await API.search({
@@ -521,31 +743,35 @@ document.addEventListener('DOMContentLoaded', () => {
       if (res.results.length === 0) {
         container.innerHTML = `
           <div class="search-initial-state">
-            <div class="hint-icon">∅</div>
-            <h3>No matches found</h3>
-            <p>No indexed files matched query: "<strong>${escapeHtml(query)}</strong>" in ${currentMode.toUpperCase()} mode.</p>
+            <div class="hint-icon">🔍</div>
+            <h3>No Matches Found</h3>
+            <p>No files matched "<strong>${escapeHtml(query)}</strong>" using ${friendlyModeLabels[currentMode]}. Try searching with different words or use Smart Search.</p>
           </div>
         `;
         return;
       }
 
       container.innerHTML = `
-        <div style="font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); margin-bottom: 8px;">
-          Found ${res.total} matches across indexed files (${res.mode.toUpperCase()} · ${modeLabels[currentMode] || currentMode})
+        <div style="font-size: 13px; color: var(--text-dim); margin-bottom: 8px;">
+          Found ${res.total} matching sections (${friendlyModeLabels[currentMode]})
         </div>
         ${res.results
           .map((hit) => {
-            const modeBadgeClass = hit.match_mode && hit.match_mode.includes('semantic')
-              ? 'source'
-              : (hit.match_mode && hit.match_mode.includes('hybrid') ? 'data' : 'document');
-            const scoreLabel = hit.score !== undefined ? ` · Score ${hit.score}` : '';
+            const matchTag = hit.match_mode && hit.match_mode.includes('semantic')
+              ? 'By Meaning'
+              : (hit.match_mode && hit.match_mode.includes('hybrid') ? 'Smart Match' : 'By Words');
+
+            const scoreBadge = hit.score !== undefined
+              ? (hit.score > 0.75 ? 'Strong Match' : 'Good Match')
+              : '';
 
             return `
           <div class="search-hit-card" onclick="window.viewFileDetail('${hit.file_id}')">
             <div class="search-hit-header">
               <span class="search-hit-title">${escapeHtml(hit.filename)}</span>
               <div style="display: flex; gap: 8px; align-items: center;">
-                <span class="tag-cat ${modeBadgeClass}">${escapeHtml((hit.match_mode || currentMode).toUpperCase())}${scoreLabel}</span>
+                <span class="tag-cat document">${matchTag}</span>
+                ${scoreBadge ? `<span class="health-meta-badge badge-low">${scoreBadge}</span>` : ''}
                 <span class="search-hit-proj">${escapeHtml(hit.project_name)}</span>
               </div>
             </div>
@@ -558,11 +784,17 @@ document.addEventListener('DOMContentLoaded', () => {
       `;
     } catch (err) {
       showToast(`Search error: ${err.message}`, 'error');
-      container.innerHTML = `<div class="search-initial-state"><div class="hint-icon">⚠️</div><h3>Search Error</h3><p>${escapeHtml(err.message)}</p></div>`;
+      container.innerHTML = `
+        <div class="search-initial-state">
+          <div class="hint-icon">⚠️</div>
+          <h3>Search Problem</h3>
+          <p>${escapeHtml(err.message)}</p>
+        </div>
+      `;
     }
   }
 
-  // Event Listeners
+  // Event Listeners for Add Project Modal
   document.getElementById('btn-open-add-project').addEventListener('click', () => {
     modalAddProject.classList.add('active');
     document.getElementById('input-project-path').focus();
@@ -591,25 +823,25 @@ document.addEventListener('DOMContentLoaded', () => {
     const nameVal = nameInput.value.trim();
 
     if (!pathVal) {
-      showToast('Project directory path is required.', 'error');
+      showToast('Please enter the folder location on your computer.', 'error');
       return;
     }
 
     try {
       const newProj = await API.createProject(pathVal, nameVal);
-      showToast(`Tracked project "${newProj.name}" successfully!`, 'success');
+      showToast(`Added project "${newProj.name}" successfully!`, 'success');
+      state.activeProjectId = newProj.id;
       modalAddProject.classList.remove('active');
       pathInput.value = '';
       nameInput.value = '';
       loadProjectsView();
       loadDashboardData();
 
-      // Trigger prompt to scan immediately
-      if (confirm(`Project "${newProj.name}" is now tracked. Would you like to scan it now?`)) {
+      if (confirm(`Project "${newProj.name}" was added. Would you like to check its files now?`)) {
         window.triggerScan(newProj.id);
       }
     } catch (err) {
-      showToast(`Error: ${err.message}`, 'error');
+      showToast(`Could not add project: ${err.message}`, 'error');
     }
   });
 
@@ -627,7 +859,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (e.key === 'Enter') runSearch();
   });
 
-  // Filter input on projects page
   document.getElementById('project-filter-input').addEventListener('input', (e) => {
     const term = e.target.value.toLowerCase();
     const filtered = state.projects.filter(
@@ -636,24 +867,8 @@ document.addEventListener('DOMContentLoaded', () => {
     renderProjectsGrid(filtered);
   });
 
-  // Helpers
-  function escapeHtml(str) {
-    if (!str) return '';
-    return str
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#039;');
-  }
-
-  function escapeJs(str) {
-    if (!str) return '';
-    return str.replace(/'/g, "\\'").replace(/"/g, '\\"');
-  }
-
   // ==========================================================================
-  // Grounded AI Chat Logic (Phase 3)
+  // SVANT Assistant Logic (AI Chat)
   // ==========================================================================
 
   async function updateAIStatusBadge() {
@@ -662,34 +877,22 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       const status = await API.getAIStatus();
       if (status.active_provider === 'gemini') {
-        badge.textContent = `Gemini (${status.model})`;
+        badge.textContent = `Gemini AI`;
         badge.className = 'badge-provider live';
       } else if (status.active_provider === 'mock') {
-        badge.textContent = 'Mock AI (Local Test)';
+        badge.textContent = 'Test Mode';
         badge.className = 'badge-provider test';
       } else if (status.local_only_mode) {
-        badge.textContent = 'Local-Only Mode';
+        badge.textContent = 'Works on Your Computer';
         badge.className = 'badge-provider local';
       } else {
-        badge.textContent = `${(status.active_provider || 'AI').toUpperCase()} (${status.is_available ? 'Ready' : 'Offline'})`;
+        badge.textContent = status.is_available ? 'Assistant Ready' : 'Assistant Offline';
         badge.className = 'badge-provider';
       }
     } catch (_) {
-      badge.textContent = 'AI Status Unknown';
+      badge.textContent = 'Assistant Ready';
       badge.className = 'badge-provider';
     }
-  }
-
-  function formatAIAnswer(rawText) {
-    if (!rawText) return '';
-    let formatted = escapeHtml(rawText);
-    // Code blocks: ```code```
-    formatted = formatted.replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>');
-    // Inline code: `code`
-    formatted = formatted.replace(/`([^`]+)`/g, '<code>$1</code>');
-    // Bold: **text**
-    formatted = formatted.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-    return formatted;
   }
 
   async function sendChatMessage() {
@@ -707,11 +910,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const welcomeCard = document.getElementById('chat-welcome');
     if (welcomeCard) welcomeCard.remove();
 
-    // Disable controls while awaiting RAG generation
     input.disabled = true;
     sendBtn.disabled = true;
 
-    // Append User Bubble
+    // User Bubble
     const userRow = document.createElement('div');
     userRow.className = 'chat-message-row user';
     userRow.innerHTML = `
@@ -722,7 +924,7 @@ document.addEventListener('DOMContentLoaded', () => {
     stream.appendChild(userRow);
     stream.scrollTop = stream.scrollHeight;
 
-    // Append Typing Indicator
+    // Typing Indicator
     const typingRow = document.createElement('div');
     typingRow.className = 'chat-message-row assistant';
     typingRow.id = 'chat-typing-row';
@@ -744,39 +946,60 @@ document.addEventListener('DOMContentLoaded', () => {
         projectId: projSelect.value || undefined,
         searchMode: modeSelect.value || 'hybrid',
         topK: parseInt(topkSelect.value, 10) || 5,
+        conversationId: state.conversationId || undefined,
+        history: state.chatHistory && state.chatHistory.length > 0 ? state.chatHistory : undefined,
       });
 
       typingRow.remove();
 
+      if (res.conversation_id) {
+        state.conversationId = res.conversation_id;
+      }
+
+      let answerText = '';
+      if (typeof res.answer === 'string') {
+        answerText = res.answer;
+      } else if (res.answer && typeof res.answer === 'object') {
+        answerText = res.answer.text || res.answer.content || res.answer.summary || res.answer.message || JSON.stringify(res.answer, null, 2);
+      } else if (typeof res === 'string') {
+        answerText = res;
+      } else if (res && typeof res === 'object') {
+        answerText = res.text || res.message || res.summary || 'SVANT generated an answer for your project.';
+      } else {
+        answerText = 'SVANT generated an answer for your project.';
+      }
+
+      state.chatHistory.push({ role: 'user', content: text });
+      state.chatHistory.push({ role: 'assistant', content: answerText });
+      if (state.chatHistory.length > 10) {
+        state.chatHistory = state.chatHistory.slice(-10);
+      }
+
       const sources = res.sources || res.citations || [];
       const redactionCount = res.redactions !== undefined ? res.redactions : (res.redactions_count || 0);
-      const provName = res.provider || res.provider_name || 'AI';
 
       const redactionHtml = redactionCount > 0
-        ? `<span class="redaction-indicator" title="${redactionCount} sensitive secrets (keys, passwords, tokens) were masked locally before generation">🛡️ ${redactionCount} Redacted</span>`
+        ? `<span class="redaction-indicator" title="Private information was found and masked before processing">🛡️ ${redactionCount} Private Values Protected</span>`
         : '';
 
       const citationsHtml = sources.length > 0
         ? `
         <div class="citations-box">
           <div class="citations-header">
-            <span>Source Grounding Citations</span>
-            <span class="citations-count-badge">${sources.length} cited source${sources.length > 1 ? 's' : ''}</span>
+            <span>Where we found this:</span>
+            <span class="citations-count-badge">${sources.length} file section${sources.length > 1 ? 's' : ''}</span>
           </div>
           <div class="citations-list">
             ${sources.map((c) => {
-              const loc = c.location || (c.start_line && c.end_line ? `Lines ${c.start_line}-${c.end_line}` : `Chunk #${(c.chunk_index !== undefined ? c.chunk_index : 0)}`);
-              const scoreVal = c.relevance_score !== undefined ? c.relevance_score : c.score;
-              const scoreBadge = scoreVal !== undefined ? `<span class="citation-score">Relevance: ${scoreVal}</span>` : '';
+              const loc = c.location || (c.start_line && c.end_line ? `Lines ${c.start_line}–${c.end_line}` : `Section #${(c.chunk_index !== undefined ? c.chunk_index : 0)}`);
               const snippetText = c.snippet_preview || c.snippet || '';
               return `
-                <div class="citation-card" onclick="window.viewFileDetail('${c.file_id}')" title="Inspect file: ${escapeHtml(c.relative_path || c.path || c.filename)}">
+                <div class="citation-card" onclick="window.viewFileDetail('${c.file_id}')" title="Click to view file: ${escapeHtml(c.relative_path || c.filename)}">
                   <div class="citation-top">
-                    <div class="citation-file-info">
+                    <div>
                       <span class="citation-filename">📄 ${escapeHtml(c.filename)}</span>
-                      <span class="citation-location">${loc}</span>
+                      <span class="citation-location">(${loc})</span>
                     </div>
-                    ${scoreBadge}
                   </div>
                   <div class="citation-snippet">${escapeHtml(snippetText)}</div>
                 </div>
@@ -787,24 +1010,28 @@ document.addEventListener('DOMContentLoaded', () => {
         `
         : '';
 
+      const modeLabels = {
+        hybrid: 'Smart Search',
+        semantic: 'Search by Meaning',
+        keyword: 'Search by Words',
+      };
+
       const assistantRow = document.createElement('div');
       assistantRow.className = 'chat-message-row assistant';
       assistantRow.innerHTML = `
         <div class="chat-bubble">
           <div class="bubble-header">
-            <span class="assistant-tag">⚡ SVANT RAG</span>
+            <span class="assistant-tag">✨ SVANT Assistant</span>
             ${redactionHtml}
           </div>
-          <div class="assistant-text">${formatAIAnswer(res.answer)}</div>
+          <div class="assistant-text">${formatMarkdown(answerText)}</div>
           ${citationsHtml}
           <div class="bubble-meta-footer">
-            <span>Mode: ${(res.mode || 'hybrid').toUpperCase()}</span>
+            <span>Search: ${modeLabels[res.mode] || 'Smart Search'}</span>
             <span>·</span>
-            <span>Context Chunks: ${res.context_count !== undefined ? res.context_count : sources.length}</span>
+            <span>${res.context_count !== undefined ? res.context_count : sources.length} sections used</span>
             <span>·</span>
-            <span>Provider: ${escapeHtml(provName)}</span>
-            <span>·</span>
-            <span style="color: var(--emerald-primary);">✓ Grounded Context</span>
+            <span>Grounded in project files</span>
           </div>
         </div>
       `;
@@ -812,14 +1039,29 @@ document.addEventListener('DOMContentLoaded', () => {
       input.value = '';
     } catch (err) {
       typingRow.remove();
+      const rawError = err && err.message ? String(err.message) : 'Unknown connection or processing error';
+      const cleanError = rawError.replace(/\[object Object\]/g, 'Validation error or unexpected data format');
+      const escapedQuestion = escapeHtml(text).replace(/'/g, "\\'");
+
       const errorRow = document.createElement('div');
       errorRow.className = 'chat-message-row assistant';
       errorRow.innerHTML = `
-        <div class="chat-bubble" style="border-color: var(--rose-primary);">
+        <div class="chat-bubble error-bubble" style="border-color: var(--pastel-pink-border); background-color: var(--pastel-pink-bg);">
           <div class="bubble-header">
-            <span class="assistant-tag" style="color: var(--rose-primary);">⚠️ Error</span>
+            <span class="assistant-tag" style="color: var(--pastel-pink-text); font-weight: 700;">⚠️ SVANT couldn't answer that right now.</span>
           </div>
-          <div class="assistant-text" style="color: var(--rose-primary);">${escapeHtml(err.message)}</div>
+          <div class="assistant-text" style="color: var(--pastel-pink-text); margin-bottom: 8px;">
+            We encountered a problem while generating an answer for your project. Please make sure a project is selected and analyzed, then try again.
+          </div>
+          <div style="margin-top: 10px; margin-bottom: 6px;">
+            <button class="btn btn-secondary btn-sm" id="btn-chat-retry-${Date.now()}" onclick="window.retryChatMessage('${escapedQuestion}')" style="background-color: var(--bg-card); border-color: var(--pastel-pink-border); color: var(--pastel-pink-text); cursor: pointer;">
+              🔄 Try again
+            </button>
+          </div>
+          <details class="tech-details-accordion" style="margin-top: 8px; font-size: 11.5px; color: var(--text-muted);">
+            <summary style="cursor: pointer; font-weight: 600;">Technical details</summary>
+            <div style="margin-top: 6px; padding: 8px 10px; background-color: rgba(0, 0, 0, 0.04); border-radius: var(--radius-xs); font-family: var(--font-mono); font-size: 11px; white-space: pre-wrap; word-break: break-word;">${escapeHtml(cleanError)}</div>
+          </details>
         </div>
       `;
       stream.appendChild(errorRow);
@@ -831,11 +1073,16 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // Chat Event Listeners
+  window.retryChatMessage = function (text) {
+    const input = document.getElementById('chat-input');
+    if (input) {
+      input.value = text;
+      sendChatMessage();
+    }
+  };
+
   const chatSendBtn = document.getElementById('btn-chat-send');
-  if (chatSendBtn) {
-    chatSendBtn.addEventListener('click', sendChatMessage);
-  }
+  if (chatSendBtn) chatSendBtn.addEventListener('click', sendChatMessage);
 
   const chatInput = document.getElementById('chat-input');
   if (chatInput) {
@@ -850,26 +1097,39 @@ document.addEventListener('DOMContentLoaded', () => {
   const chatClearBtn = document.getElementById('btn-clear-chat');
   if (chatClearBtn) {
     chatClearBtn.addEventListener('click', () => {
+      state.conversationId = null;
+      state.chatHistory = [];
       const stream = document.getElementById('chat-stream');
       stream.innerHTML = `
         <div class="chat-welcome-card" id="chat-welcome">
           <div class="welcome-glyph">✨</div>
-          <h2>Grounded Local RAG Assistant</h2>
-          <p>Ask questions about your codebase, documentation, and tracked repositories. Every answer is strictly grounded in retrieved local chunks with full source citations.</p>
+          <h2>Welcome to your SVANT Assistant</h2>
+          <p>Ask questions about your codebase, documentation, and project health in plain English. Every answer is based strictly on your project's files with clear source notes.</p>
           <div class="chat-feature-pills">
-            <span class="chat-pill">🔒 Zero Secret Leakage (Local Redaction)</span>
-            <span class="chat-pill">📑 Precise Source & Line Range Citations</span>
-            <span class="chat-pill">⚡ Hybrid FTS5 + FAISS Vector Retrieval</span>
-            <span class="chat-pill">🛡️ Honest "I don't know" when context lacks facts</span>
+            <span class="chat-pill">🔒 Private Information Protected (stays on your computer)</span>
+            <span class="chat-pill">📑 Clear notes showing where answers were found</span>
+            <span class="chat-pill">💡 Explanations anyone can understand</span>
+            <span class="chat-pill">🛡️ Honest "I don't know" if the files don't have the answer</span>
           </div>
         </div>
       `;
-      showToast('Chat history cleared', 'info');
+      showToast('Conversation cleared', 'info');
     });
   }
 
+  document.querySelectorAll('.prompt-chip').forEach((chip) => {
+    chip.addEventListener('click', () => {
+      const q = chip.getAttribute('data-query');
+      const input = document.getElementById('chat-input');
+      if (input && q) {
+        input.value = q;
+        sendChatMessage();
+      }
+    });
+  });
+
   // =====================================================================
-  // PHASE 4 & 5: HEALTH, SECURITY, DUPLICATES & AI INSIGHTS
+  // HEALTH, SECURITY, DUPLICATES & AI INSIGHTS
   // =====================================================================
 
   let currentRecommendationsData = null;
@@ -877,7 +1137,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function populateSelect(selectElem, currentVal) {
     if (!selectElem) return;
-    const existingVal = currentVal || selectElem.value;
+    const existingVal = currentVal || (state.activeProjectId && state.projects.some((p) => p.id === state.activeProjectId) ? state.activeProjectId : selectElem.value);
     selectElem.innerHTML = '';
     state.projects.forEach((p) => {
       const opt = document.createElement('option');
@@ -889,6 +1149,27 @@ document.addEventListener('DOMContentLoaded', () => {
       selectElem.value = existingVal;
     } else if (state.projects.length) {
       selectElem.value = state.projects[0].id;
+      if (!state.activeProjectId) state.activeProjectId = state.projects[0].id;
+    }
+  }
+
+  function syncActiveProjectSelects(newVal) {
+    state.activeProjectId = newVal;
+    const selectIds = [
+      'health-project-select',
+      'security-project-select',
+      'duplicates-project-select',
+      'chat-project-select',
+    ];
+    selectIds.forEach((id) => {
+      const el = document.getElementById(id);
+      if (el && el.value !== newVal && Array.from(el.options).some((o) => o.value === newVal)) {
+        el.value = newVal;
+      }
+    });
+    const searchEl = document.getElementById('search-project-select');
+    if (searchEl && searchEl.value !== newVal && Array.from(searchEl.options).some((o) => o.value === newVal)) {
+      searchEl.value = newVal;
     }
   }
 
@@ -898,34 +1179,61 @@ document.addEventListener('DOMContentLoaded', () => {
     populateSelect(projSelect);
     const projectId = projSelect ? projSelect.value : null;
     if (!projectId) {
-      document.getElementById('health-empty-state').style.display = 'block';
+      const emptyState = document.getElementById('health-empty-state');
+      if (emptyState) {
+        emptyState.style.display = 'block';
+        emptyState.innerHTML = `
+          <div class="empty-icon">📁</div>
+          <h3>No Projects Added Yet</h3>
+          <p>Add a project folder first to inspect project health.</p>
+        `;
+      }
       document.getElementById('health-content').style.display = 'none';
       return;
     }
 
+    const emptyState = document.getElementById('health-empty-state');
+    if (emptyState) {
+      emptyState.innerHTML = `
+        <div class="empty-icon">📊</div>
+        <h3>Project Health Not Checked Yet</h3>
+        <p>Select a project and click "Check Project Health" to review code quality, security, tests, and documentation.</p>
+      `;
+    }
+
     try {
       const health = await API.getProjectHealth(projectId);
-      document.getElementById('health-empty-state').style.display = 'none';
+      if (emptyState) emptyState.style.display = 'none';
       const content = document.getElementById('health-content');
       content.style.display = 'block';
 
-      // Overall Grade & Summary
+      // Grade badge & score
       const gradeBadge = document.getElementById('health-grade-badge');
       gradeBadge.textContent = health.grade;
       gradeBadge.className = `grade-badge-large grade-${health.grade}`;
 
       document.getElementById('health-score-number').textContent = health.overall_score;
       document.getElementById('health-summary-text').textContent = health.summary;
-      document.getElementById('health-timestamp').textContent = `Last analyzed: ${formatDate(health.analyzed_at)}`;
+      document.getElementById('health-timestamp').textContent = `Last checked: ${formatDate(health.analyzed_at)}`;
 
-      document.getElementById('health-count-crit').textContent = `${health.critical_count} Critical`;
-      document.getElementById('health-count-high').textContent = `${health.high_count} High`;
-      document.getElementById('health-count-med').textContent = `${health.medium_count} Medium`;
-      document.getElementById('health-count-low').textContent = `${health.low_count} Low`;
+      document.getElementById('health-count-crit').textContent = `${health.critical_count} Fix Now`;
+      document.getElementById('health-count-high').textContent = `${health.high_count} Fix Soon`;
+      document.getElementById('health-count-med').textContent = `${health.medium_count} Important`;
+      document.getElementById('health-count-low').textContent = `${health.low_count} Minor`;
 
       // Components Grid
       const compGrid = document.getElementById('health-components-grid');
       compGrid.innerHTML = '';
+
+      const friendlyCompNames = {
+        security: 'Security & Secrets',
+        testing: 'Tests & Quality',
+        hygiene: 'Project Cleanliness',
+        documentation: 'Documentation & Guides',
+        dependencies: 'Libraries Used',
+        structure: 'Code Organization',
+      };
+
       if (health.component_scores) {
         Object.entries(health.component_scores).forEach(([catKey, comp]) => {
           const compCard = document.createElement('div');
@@ -935,11 +1243,12 @@ document.addEventListener('DOMContentLoaded', () => {
           else if (comp.score < 80) colorClass = 'score-yellow';
           else if (comp.score < 90) colorClass = 'score-blue';
 
-          const pctWeight = Math.round(comp.weight * 100);
+          const compTitle = friendlyCompNames[catKey.toLowerCase()] || comp.category || catKey;
+
           compCard.innerHTML = `
             <div class="comp-header">
-              <span class="comp-name">${escapeHtml(comp.category || catKey)}</span>
-              <span class="comp-weight">${pctWeight}% Weight · <strong>${comp.score}/100</strong></span>
+              <span class="comp-name">${escapeHtml(compTitle)}</span>
+              <span class="comp-weight"><strong>${comp.score} / 100</strong></span>
             </div>
             <div class="comp-score-bar">
               <div class="comp-score-fill ${colorClass}" style="width: ${comp.score}%;"></div>
@@ -950,10 +1259,8 @@ document.addEventListener('DOMContentLoaded', () => {
         });
       }
 
-      // Recommendations
       loadRecommendations(projectId);
-    } catch (err) {
-      // Not analyzed yet
+    } catch (_) {
       document.getElementById('health-empty-state').style.display = 'block';
       document.getElementById('health-content').style.display = 'none';
     }
@@ -991,8 +1298,8 @@ document.addEventListener('DOMContentLoaded', () => {
       recsContainer.innerHTML = `
         <div class="empty-state-card">
           <div class="empty-icon">✅</div>
-          <h3>No Open Issues in this Tier</h3>
-          <p>Great job! No unresolved findings match the selected filter.</p>
+          <h3>No Open Issues Here</h3>
+          <p>Great job! There are no unresolved issues matching this category.</p>
         </div>
       `;
       return;
@@ -1011,55 +1318,57 @@ document.addEventListener('DOMContentLoaded', () => {
     card.className = `finding-card severity-${finding.severity}`;
 
     const sevBadgeClass = `badge-${finding.severity === 'critical' ? 'crit' : finding.severity === 'high' ? 'high' : finding.severity === 'medium' ? 'med' : 'low'}`;
-    const evidenceHtml = finding.evidence ? `<div class="finding-evidence"><code>${escapeHtml(finding.evidence)}</code></div>` : '';
+    const sevLabel = finding.severity === 'critical' ? 'Fix Now' : (finding.severity === 'high' ? 'Fix Soon' : (finding.severity === 'medium' ? 'Important' : 'Minor'));
+
+    const evidenceHtml = finding.evidence
+      ? `<div class="finding-evidence"><code>${escapeHtml(finding.evidence)}</code></div>`
+      : '';
 
     card.innerHTML = `
       <div class="finding-top-row">
         <div class="finding-title-group">
-          <span class="health-meta-badge ${sevBadgeClass}">${finding.severity.toUpperCase()}</span>
+          <span class="health-meta-badge ${sevBadgeClass}">${sevLabel}</span>
           <span class="finding-title">${escapeHtml(finding.title)}</span>
           <span class="finding-path">${escapeHtml(finding.relative_path || 'Project Root')}</span>
         </div>
         <div class="finding-actions">
-          <select class="form-control select-status-toggle" style="font-size: 11px; padding: 4px 8px;">
+          <select class="form-control select-status-toggle" style="font-size: 11.5px; padding: 4px 8px;">
             <option value="open" ${finding.status === 'open' ? 'selected' : ''}>Open</option>
             <option value="acknowledged" ${finding.status === 'acknowledged' ? 'selected' : ''}>Acknowledged</option>
             <option value="resolved" ${finding.status === 'resolved' ? 'selected' : ''}>Resolved</option>
             <option value="ignored" ${finding.status === 'ignored' ? 'selected' : ''}>Ignored</option>
           </select>
-          <button class="btn btn-ghost btn-sm btn-explain-finding" title="Ask AI to analyze and provide code fix">
-            <span>💡 Explain</span>
+          <button class="btn btn-secondary btn-sm btn-explain-finding" title="Ask SVANT to explain this problem in plain English">
+            <span>💡 Explain Problem</span>
           </button>
         </div>
       </div>
       <div class="finding-desc">${escapeHtml(finding.description)}</div>
       ${evidenceHtml}
       <div class="finding-rec">
-        <strong>Recommendation:</strong> ${escapeHtml(finding.recommendation)}
+        <strong>What to do:</strong> ${escapeHtml(finding.recommendation)}
       </div>
     `;
 
-    // Status change listener
     const statusSelect = card.querySelector('.select-status-toggle');
     statusSelect.addEventListener('change', async () => {
       try {
         await API.updateFindingStatus(projectId, finding.id, statusSelect.value);
-        showToast(`Finding marked as ${statusSelect.value}`, 'success');
+        showToast(`Problem marked as ${statusSelect.value}`, 'success');
         if (onStatusUpdate) onStatusUpdate();
       } catch (err) {
         showToast(`Failed to update status: ${err.message}`, 'error');
       }
     });
 
-    // Explain listener
     const explainBtn = card.querySelector('.btn-explain-finding');
     explainBtn.addEventListener('click', async () => {
-      showAIModal(`Explaining Finding: ${finding.title}`, 'Analyzing finding impact and drafting code remediation...');
+      showAIModal(`Explaining Problem: ${finding.title}`, 'Analyzing what happened and drafting easy-to-follow steps to fix it...');
       try {
         const res = await API.aiExplainFinding(projectId, finding.id);
         renderAIModalContent(res.content);
       } catch (err) {
-        renderAIModalContent(`Failed to explain finding: ${err.message}`);
+        renderAIModalContent(`Could not explain problem: ${err.message}`);
       }
     });
 
@@ -1071,7 +1380,22 @@ document.addEventListener('DOMContentLoaded', () => {
     const projSelect = document.getElementById('security-project-select');
     populateSelect(projSelect);
     const projectId = projSelect ? projSelect.value : null;
-    if (!projectId) return;
+    if (!projectId) {
+      document.getElementById('sec-count-crit').textContent = '0 Fix Now';
+      document.getElementById('sec-count-high').textContent = '0 Fix Soon';
+      document.getElementById('sec-count-total').textContent = '0 Total';
+      const listContainer = document.getElementById('security-findings-list');
+      if (listContainer) {
+        listContainer.innerHTML = `
+          <div class="empty-state-card">
+            <div class="empty-icon">📁</div>
+            <h3>No Projects Added Yet</h3>
+            <p>Add a project folder first to check for security problems.</p>
+          </div>
+        `;
+      }
+      return;
+    }
 
     const sevFilter = document.getElementById('security-severity-filter').value;
     const statusFilter = document.getElementById('security-status-filter').value;
@@ -1083,11 +1407,10 @@ document.addEventListener('DOMContentLoaded', () => {
         status: statusFilter || undefined,
       });
 
-      // Update counters
       const critCount = findings.filter((f) => f.severity === 'critical' && f.status === 'open').length;
       const highCount = findings.filter((f) => f.severity === 'high' && f.status === 'open').length;
-      document.getElementById('sec-count-crit').textContent = `${critCount} Critical`;
-      document.getElementById('sec-count-high').textContent = `${highCount} High`;
+      document.getElementById('sec-count-crit').textContent = `${critCount} Fix Now`;
+      document.getElementById('sec-count-high').textContent = `${highCount} Fix Soon`;
       document.getElementById('sec-count-total').textContent = `${findings.length} Total`;
 
       const listContainer = document.getElementById('security-findings-list');
@@ -1097,8 +1420,8 @@ document.addEventListener('DOMContentLoaded', () => {
         listContainer.innerHTML = `
           <div class="empty-state-card">
             <div class="empty-icon">🛡️</div>
-            <h3>No Security Findings Detected</h3>
-            <p>Codebase is clean. Zero exposed secrets or dangerous configurations match this filter.</p>
+            <h3>No Security Problems Found</h3>
+            <p>Your project is clean. Zero exposed passwords or risky settings match this filter.</p>
           </div>
         `;
         return;
@@ -1120,52 +1443,165 @@ document.addEventListener('DOMContentLoaded', () => {
     const projSelect = document.getElementById('duplicates-project-select');
     populateSelect(projSelect);
     const projectId = projSelect ? projSelect.value : null;
-    if (!projectId) return;
+
+    const totalClustersEl = document.getElementById('dup-total-clusters');
+    const exactClustersEl = document.getElementById('dup-exact-clusters');
+    const similarClustersEl = document.getElementById('dup-similar-clusters');
+    const wastedStorageEl = document.getElementById('dup-wasted-storage');
+    const totalCopiesEl = document.getElementById('dup-total-copies');
+    const listContainer = document.getElementById('duplicates-clusters-list');
+
+    const resetCounters = () => {
+      if (totalClustersEl) totalClustersEl.textContent = '0';
+      if (exactClustersEl) exactClustersEl.textContent = '0';
+      if (similarClustersEl) similarClustersEl.textContent = '0';
+      if (wastedStorageEl) wastedStorageEl.textContent = '0 B';
+      if (totalCopiesEl) totalCopiesEl.textContent = '0';
+    };
+
+    // Case 3: No Project Selected
+    if (!projectId) {
+      resetCounters();
+      if (listContainer) {
+        listContainer.innerHTML = `
+          <div class="empty-state-card">
+            <div class="empty-icon">📁</div>
+            <h3>No Project Selected</h3>
+            <p>Please select a project from the dropdown above to inspect duplicate files.</p>
+          </div>
+        `;
+      }
+      return;
+    }
+
+    // Check project scan status
+    const currentProj = state.projects.find((p) => p.id === projectId);
+    // Case 4: Analysis Not Run Yet / No Files Scanned
+    if (currentProj && (currentProj.file_count === 0 || !currentProj.last_scanned_at)) {
+      resetCounters();
+      if (listContainer) {
+        listContainer.innerHTML = `
+          <div class="empty-state-card">
+            <div class="empty-icon">⚡</div>
+            <h3>Project Files Not Checked Yet</h3>
+            <p>This project hasn't been scanned for files yet. Check project files to detect duplicates and reclaim storage.</p>
+            <button class="btn btn-primary mt-3" onclick="window.triggerScan('${projectId}')">
+              <span>⚡ Check Project Files Now</span>
+            </button>
+          </div>
+        `;
+      }
+      return;
+    }
+
+    // Case 5: Loading State
+    if (listContainer) {
+      listContainer.innerHTML = `
+        <div class="empty-state-card">
+          <div class="empty-icon">⏳</div>
+          <h3>Checking for Duplicate Files...</h3>
+          <p>Analyzing file content and calculating text similarity for ${escapeHtml(currentProj ? currentProj.name : 'your project')}...</p>
+        </div>
+      `;
+    }
 
     try {
       const clusters = await API.getProjectDuplicates(projectId);
-      const totalClusters = clusters.length;
-      let totalWasted = 0;
-      let totalCopies = 0;
+      state.duplicateClusters = clusters || [];
 
-      clusters.forEach((c) => {
-        totalWasted += c.wasted_bytes || 0;
-        totalCopies += c.count || 0;
-      });
-
-      document.getElementById('dup-total-clusters').textContent = totalClusters;
-      document.getElementById('dup-wasted-storage').textContent = formatBytes(totalWasted);
-      document.getElementById('dup-total-copies').textContent = totalCopies;
-
-      const listContainer = document.getElementById('duplicates-clusters-list');
-      listContainer.innerHTML = '';
-
-      if (!clusters.length) {
-        listContainer.innerHTML = `
-          <div class="empty-state-card">
-            <div class="empty-icon">✨</div>
-            <h3>No Duplicate Files Found</h3>
-            <p>Every file in this project has unique content. No redundant storage detected.</p>
-          </div>
-        `;
+      // Case 2: No Duplicates Found
+      if (!clusters || !clusters.length) {
+        resetCounters();
+        if (listContainer) {
+          listContainer.innerHTML = `
+            <div class="empty-state-card">
+              <div class="empty-icon">✨</div>
+              <h3>No Duplicate Files Detected</h3>
+              <p>Every file in this project has unique content. Zero exact or near-duplicate files found.</p>
+            </div>
+          `;
+        }
         return;
       }
 
-      clusters.forEach((cl) => {
+      // Case 1: Duplicates Found
+      const totalClusters = clusters.length;
+      let totalWasted = 0;
+      let totalCopies = 0;
+      let exactCount = 0;
+      let similarCount = 0;
+
+      clusters.forEach((c) => {
+        totalWasted += c.wasted_bytes || 0;
+        const count = c.count || c.file_count || (c.files ? c.files.length : 0);
+        totalCopies += Math.max(0, count - 1);
+        if (c.duplicate_type === 'similar') {
+          similarCount++;
+        } else {
+          exactCount++;
+        }
+      });
+
+      if (totalClustersEl) totalClustersEl.textContent = totalClusters;
+      if (exactClustersEl) exactClustersEl.textContent = exactCount;
+      if (similarClustersEl) similarClustersEl.textContent = similarCount;
+      if (wastedStorageEl) wastedStorageEl.textContent = formatBytes(totalWasted);
+      if (totalCopiesEl) totalCopiesEl.textContent = totalCopies;
+
+      listContainer.innerHTML = '';
+
+      clusters.forEach((cl, clusterIdx) => {
         const card = document.createElement('div');
         card.className = 'dup-cluster-card';
-        const fileItems = (cl.files || [])
-          .map((f) => `<div class="dup-file-item"><span>${escapeHtml(f.relative_path || f.filename)}</span><span>${formatBytes(f.size_bytes)}</span></div>`)
-          .join('');
+
+        const isExact = (cl.duplicate_type !== 'similar');
+        const badgeHtml = isExact
+          ? `<span class="badge-dup exact">100% Exact Match</span>`
+          : `<span class="badge-dup similar">${cl.similarity_pct || 90}% Similar</span>`;
+
+        const titleText = isExact
+          ? `${cl.count} identical copies`
+          : `${cl.count} highly similar files`;
+
+        const subtitleText = cl.difference_summary || cl.reason || (isExact ? 'Identical SHA-256 content' : 'Similar code structure');
+
+        const fileItems = (cl.files || []).map((f) => {
+          const roleClass = f.role === 'original' ? 'original' : (f.role === 'variant' ? 'variant' : 'copy');
+          const roleLabel = f.role === 'original' ? 'Original' : (f.role === 'variant' ? 'Variant' : 'Copy');
+          return `
+            <div class="dup-file-item">
+              <div class="dup-file-item-left">
+                <span class="role-pill ${roleClass}">${roleLabel}</span>
+                <span class="dup-file-path" title="${escapeHtml(f.relative_path || f.filename)}">${escapeHtml(f.relative_path || f.filename)}</span>
+              </div>
+              <div class="dup-file-item-right">
+                <span>${formatBytes(f.size_bytes)}</span>
+                <span>${formatDate(f.modified_time)}</span>
+                <button class="btn btn-ghost btn-xs" onclick="window.viewFileDetail('${f.id}')">View Details</button>
+              </div>
+            </div>
+          `;
+        }).join('');
+
+        const canCompare = cl.files && cl.files.length >= 2;
+        const compareBtnHtml = canCompare
+          ? `<button class="btn btn-secondary btn-sm" onclick="window.openCompareModal(${clusterIdx})"><span>🔍 Compare Files</span></button>`
+          : '';
 
         card.innerHTML = `
           <div class="dup-cluster-header">
-            <div>
-              <span class="dup-hash">SHA-256: ${cl.sha256.substring(0, 16)}...</span>
-              <span class="health-meta-badge badge-med" style="margin-left: 8px;">${cl.count} copies</span>
+            <div class="dup-cluster-header-left">
+              ${badgeHtml}
+              <div>
+                <strong>${escapeHtml(titleText)}</strong>
+                <div class="dup-stats" style="font-size:12px; margin-top:2px;">${escapeHtml(subtitleText)}</div>
+              </div>
             </div>
-            <div class="dup-stats">
-              Each: ${formatBytes(cl.size_bytes)} · <strong>Wasted: ${formatBytes(cl.wasted_bytes)}</strong>
+            <div class="dup-cluster-header-right">
+              <div class="dup-stats">
+                Space you could save: <strong>${formatBytes(cl.wasted_bytes)}</strong>
+              </div>
+              ${compareBtnHtml}
             </div>
           </div>
           <div class="dup-file-list">${fileItems}</div>
@@ -1174,6 +1610,154 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     } catch (err) {
       console.error('Error loading duplicates:', err);
+      // Case 6: Error State
+      resetCounters();
+      if (listContainer) {
+        listContainer.innerHTML = `
+          <div class="empty-state-card">
+            <div class="empty-icon">⚠️</div>
+            <h3>Could Not Check for Duplicates</h3>
+            <p>${escapeHtml(err.message)}</p>
+            <button class="btn btn-secondary mt-3" onclick="loadDuplicatesView()">
+              <span>🔄 Try Again</span>
+            </button>
+          </div>
+        `;
+      }
+    }
+  }
+
+  // --- FILE COMPARISON MODAL ---
+  window.openCompareModal = async function(clusterIndex) {
+    if (!modalCompareFiles) return;
+    const cluster = (state.duplicateClusters || [])[clusterIndex];
+    if (!cluster || !cluster.files || cluster.files.length < 2) return;
+
+    const fileA = cluster.files[0];
+    const fileB = cluster.files[1];
+
+    const isExact = (cluster.duplicate_type !== 'similar');
+    const badgeEl = document.getElementById('modal-compare-badge');
+    if (badgeEl) {
+      badgeEl.className = isExact ? 'badge-dup exact' : 'badge-dup similar';
+      badgeEl.textContent = isExact ? '100% Exact Match' : `${cluster.similarity_pct || 90}% Similar`;
+    }
+
+    const titleEl = document.getElementById('modal-compare-title');
+    if (titleEl) {
+      titleEl.textContent = `Compare: ${fileA.filename} vs ${fileB.filename}`;
+    }
+
+    const subEl = document.getElementById('modal-compare-subtitle');
+    if (subEl) {
+      subEl.textContent = cluster.difference_summary || cluster.reason || 'Side-by-side content and metadata comparison';
+    }
+
+    const bannerEl = document.getElementById('modal-compare-banner');
+    if (bannerEl) {
+      bannerEl.textContent = isExact
+        ? 'These files contain 100% identical content. You can safely keep the original and remove duplicate copies to reclaim storage.'
+        : `These files share ${cluster.similarity_pct || 90}% content with minor modifications. Compare both versions below to review differences.`;
+    }
+
+    // Set file A metadata
+    const tagA = document.getElementById('compare-tag-a');
+    if (tagA) {
+      tagA.textContent = fileA.role === 'original' ? 'Original / Primary' : 'Variant';
+      tagA.className = `role-pill ${fileA.role === 'original' ? 'original' : 'variant'}`;
+    }
+    const nameA = document.getElementById('compare-file-a-name');
+    if (nameA) nameA.textContent = fileA.relative_path || fileA.filename;
+    const metaA = document.getElementById('compare-file-a-meta');
+    if (metaA) metaA.textContent = `${formatBytes(fileA.size_bytes)} · Modified ${formatDate(fileA.modified_time)}`;
+
+    // Set file B metadata
+    const tagB = document.getElementById('compare-tag-b');
+    if (tagB) {
+      tagB.textContent = fileB.role === 'variant' ? `Variant (${cluster.similarity_pct || 90}% match)` : 'Duplicate Copy';
+      tagB.className = `role-pill ${fileB.role === 'variant' ? 'variant' : 'copy'}`;
+    }
+    const nameB = document.getElementById('compare-file-b-name');
+    if (nameB) nameB.textContent = fileB.relative_path || fileB.filename;
+    const metaB = document.getElementById('compare-file-b-meta');
+    if (metaB) metaB.textContent = `${formatBytes(fileB.size_bytes)} · Modified ${formatDate(fileB.modified_time)}`;
+
+    const contentA = document.getElementById('compare-file-a-content');
+    const contentB = document.getElementById('compare-file-b-content');
+    if (contentA) contentA.textContent = 'Loading text preview...';
+    if (contentB) contentB.textContent = 'Loading text preview...';
+
+    modalCompareFiles.classList.add('active');
+
+    try {
+      const [detailA, detailB] = await Promise.all([
+        API.getFileDetail(fileA.id),
+        API.getFileDetail(fileB.id),
+      ]);
+      if (contentA) contentA.textContent = detailA.content_preview || '(No text extracted or file is binary)';
+      if (contentB) contentB.textContent = detailB.content_preview || '(No text extracted or file is binary)';
+    } catch (err) {
+      if (contentA) contentA.textContent = `Error loading content: ${err.message}`;
+      if (contentB) contentB.textContent = `Error loading content: ${err.message}`;
+    }
+  };
+
+  // --- SETTINGS VIEW ---
+  async function loadSettingsView() {
+    try {
+      const cfg = await API.getSettings();
+      state.settings = cfg;
+
+      const dirEl = document.getElementById('settings-storage-dir');
+      if (dirEl) dirEl.textContent = cfg.data_dir;
+
+      const dbFileEl = document.getElementById('settings-db-file');
+      if (dbFileEl) dbFileEl.textContent = cfg.db_path.split(/[\/\\]/).pop();
+
+      const tagsEl = document.getElementById('settings-excluded-tags');
+      if (tagsEl && cfg.excluded_dirs) {
+        tagsEl.innerHTML = cfg.excluded_dirs
+          .map((d) => `<span class="tag-item">${escapeHtml(d)}</span>`)
+          .join('');
+      }
+
+      const modeBadge = document.getElementById('settings-ai-mode-badge');
+      const modeDesc = document.getElementById('settings-ai-mode-desc');
+      if (modeBadge) {
+        if (cfg.ai_provider === 'gemini' && cfg.gemini_configured) {
+          modeBadge.textContent = 'Gemini AI';
+          modeBadge.className = 'badge-provider live';
+          if (modeDesc) modeDesc.textContent = `Answers generated using Google Gemini (${cfg.gemini_model}) with local privacy protection.`;
+        } else if (cfg.ai_provider === 'mock') {
+          modeBadge.textContent = 'Test Mode';
+          modeBadge.className = 'badge-provider test';
+          if (modeDesc) modeDesc.textContent = 'Using test provider for offline development.';
+        } else {
+          modeBadge.textContent = 'Works on Your Computer';
+          modeBadge.className = 'badge-provider local';
+          if (modeDesc) modeDesc.textContent = 'Project information stays 100% on your computer without sending data to the cloud.';
+        }
+      }
+
+      const appVerEl = document.getElementById('settings-app-ver');
+      if (appVerEl) appVerEl.textContent = cfg.version;
+
+      const embedModelEl = document.getElementById('settings-embed-model');
+      if (embedModelEl) embedModelEl.textContent = cfg.embedding_model;
+
+      // Sync theme buttons in settings view
+      const currentTheme = localStorage.getItem('svant_theme') || 'light';
+      document.querySelectorAll('.theme-option-btn').forEach((btn) => {
+        btn.classList.toggle('active', btn.getAttribute('data-theme-choice') === currentTheme);
+      });
+
+      // Sync default search selector in settings view
+      const searchPrefSelect = document.getElementById('setting-default-search');
+      if (searchPrefSelect) {
+        searchPrefSelect.value = localStorage.getItem('svant_default_search') || 'hybrid';
+      }
+    } catch (err) {
+      console.error('Error loading settings:', err);
     }
   }
 
@@ -1218,7 +1802,7 @@ document.addEventListener('DOMContentLoaded', () => {
       switchPage('aichat');
       const chatInput = document.getElementById('chat-input');
       if (chatInput) {
-        chatInput.value = `Explain the key recommendations from the recent project health analysis and help me plan fixes.`;
+        chatInput.value = `Can you explain the key findings and next steps from the recent report?`;
         chatInput.focus();
       }
     });
@@ -1226,19 +1810,50 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // --- EVENT LISTENERS FOR HEALTH / SECURITY / DUPLICATES ---
   const healthSelect = document.getElementById('health-project-select');
-  if (healthSelect) healthSelect.addEventListener('change', loadHealthView);
+  if (healthSelect) {
+    healthSelect.addEventListener('change', () => {
+      syncActiveProjectSelects(healthSelect.value);
+      loadHealthView();
+    });
+  }
 
   const securitySelect = document.getElementById('security-project-select');
-  if (securitySelect) securitySelect.addEventListener('change', loadSecurityView);
+  if (securitySelect) {
+    securitySelect.addEventListener('change', () => {
+      syncActiveProjectSelects(securitySelect.value);
+      loadSecurityView();
+    });
+  }
   const secSevFilter = document.getElementById('security-severity-filter');
   if (secSevFilter) secSevFilter.addEventListener('change', loadSecurityView);
   const secStatusFilter = document.getElementById('security-status-filter');
   if (secStatusFilter) secStatusFilter.addEventListener('change', loadSecurityView);
 
   const dupSelect = document.getElementById('duplicates-project-select');
-  if (dupSelect) dupSelect.addEventListener('change', loadDuplicatesView);
+  if (dupSelect) {
+    dupSelect.addEventListener('change', () => {
+      syncActiveProjectSelects(dupSelect.value);
+      loadDuplicatesView();
+    });
+  }
 
-  // Filter pills for recommendations
+  const chatSelect = document.getElementById('chat-project-select');
+  if (chatSelect) {
+    chatSelect.addEventListener('change', () => {
+      syncActiveProjectSelects(chatSelect.value);
+    });
+  }
+
+  const fileFilterSelect = document.getElementById('file-filter-project');
+  if (fileFilterSelect) {
+    fileFilterSelect.addEventListener('change', () => {
+      if (fileFilterSelect.value) {
+        syncActiveProjectSelects(fileFilterSelect.value);
+      }
+      loadFilesView();
+    });
+  }
+
   const recFilterGroup = document.getElementById('recommendation-tier-filter');
   if (recFilterGroup) {
     recFilterGroup.addEventListener('click', (e) => {
@@ -1260,18 +1875,18 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!projectId) return showToast('Please select a project first.', 'error');
 
       runAnalysisBtn.disabled = true;
-      runAnalysisBtn.innerHTML = '<span>⏳ Analyzing Codebase...</span>';
-      showToast('Running project intelligence, health & security analysis...', 'info');
+      runAnalysisBtn.innerHTML = '<span>⏳ Checking Health...</span>';
+      showToast('Checking project health, tests, and security...', 'info');
 
       try {
         const res = await API.analyzeProject(projectId);
-        showToast(`Analysis completed! Grade ${res.grade} (${res.overall_score}/100)`, 'success');
+        showToast(`Health check complete! Grade ${res.grade} (${res.overall_score}/100)`, 'success');
         await loadHealthView();
       } catch (err) {
-        showToast(`Analysis failed: ${err.message}`, 'error');
+        showToast(`Health check failed: ${err.message}`, 'error');
       } finally {
         runAnalysisBtn.disabled = false;
-        runAnalysisBtn.innerHTML = '<span>⚡ Run Health Analysis</span>';
+        runAnalysisBtn.innerHTML = '<span>⚡ Check Project Health</span>';
       }
     });
   }
@@ -1285,16 +1900,16 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!projectId) return showToast('Please select a project first.', 'error');
 
       secScanBtn.disabled = true;
-      secScanBtn.innerHTML = '<span>⏳ Scanning Secrets...</span>';
+      secScanBtn.innerHTML = '<span>⏳ Checking for Problems...</span>';
       try {
         await API.analyzeProject(projectId);
-        showToast('Security scan completed successfully!', 'success');
+        showToast('Security check completed successfully!', 'success');
         await loadSecurityView();
       } catch (err) {
-        showToast(`Security scan failed: ${err.message}`, 'error');
+        showToast(`Security check failed: ${err.message}`, 'error');
       } finally {
         secScanBtn.disabled = false;
-        secScanBtn.innerHTML = '<span>🛡️ Run Security Scan</span>';
+        secScanBtn.innerHTML = '<span>🛡️ Check for Security Problems</span>';
       }
     });
   }
@@ -1302,9 +1917,37 @@ document.addEventListener('DOMContentLoaded', () => {
   // Refresh Duplicates button
   const refreshDupBtn = document.getElementById('btn-refresh-duplicates');
   if (refreshDupBtn) {
-    refreshDupBtn.addEventListener('click', () => {
-      loadDuplicatesView();
-      showToast('Duplicates view refreshed', 'info');
+    refreshDupBtn.addEventListener('click', async () => {
+      refreshDupBtn.disabled = true;
+      refreshDupBtn.innerHTML = '<span>⏳ Checking...</span>';
+      try {
+        await loadDuplicatesView();
+        showToast('Duplicate files check completed', 'info');
+      } catch (err) {
+        showToast(`Check failed: ${err.message}`, 'error');
+      } finally {
+        refreshDupBtn.disabled = false;
+        refreshDupBtn.innerHTML = '<span>🔄 Look for Duplicates</span>';
+      }
+    });
+  }
+
+  // Compare Files Modal Close Listeners
+  const btnCloseCompareModal = document.getElementById('btn-close-compare-modal');
+  if (btnCloseCompareModal) {
+    btnCloseCompareModal.addEventListener('click', () => {
+      if (modalCompareFiles) modalCompareFiles.classList.remove('active');
+    });
+  }
+  const btnCloseCompareBottom = document.getElementById('btn-close-compare-bottom');
+  if (btnCloseCompareBottom) {
+    btnCloseCompareBottom.addEventListener('click', () => {
+      if (modalCompareFiles) modalCompareFiles.classList.remove('active');
+    });
+  }
+  if (modalCompareFiles) {
+    modalCompareFiles.addEventListener('click', (e) => {
+      if (e.target === modalCompareFiles) modalCompareFiles.classList.remove('active');
     });
   }
 
@@ -1316,12 +1959,12 @@ document.addEventListener('DOMContentLoaded', () => {
       const projectId = projSelect ? projSelect.value : null;
       if (!projectId) return showToast('Please select a project first.', 'error');
 
-      showAIModal('Project Executive Summary', 'Analyzing codebase structure, languages, health metrics, and active risks...');
+      showAIModal('Project Summary', 'Writing a clear, plain-English summary of your project...');
       try {
         const res = await API.aiSummarizeProject(projectId);
         renderAIModalContent(res.content);
       } catch (err) {
-        renderAIModalContent(`Failed to generate summary: ${err.message}`);
+        renderAIModalContent(`Could not generate summary: ${err.message}`);
       }
     });
   }
@@ -1334,19 +1977,110 @@ document.addEventListener('DOMContentLoaded', () => {
       const projectId = projSelect ? projSelect.value : null;
       if (!projectId) return showToast('Please select a project first.', 'error');
 
-      showAIModal('Phased Remediation Plan', 'Formulating phased remediation steps based on prioritized findings...');
+      showAIModal('Step-by-Step Fix Plan', 'Organizing recommended steps to fix project problems in order of priority...');
       try {
         const res = await API.aiImprovementPlan(projectId);
         renderAIModalContent(res.content);
       } catch (err) {
-        renderAIModalContent(`Failed to generate remediation plan: ${err.message}`);
+        renderAIModalContent(`Could not generate plan: ${err.message}`);
       }
     });
   }
 
+  // AI Onboarding button
+  const aiOnboardBtn = document.getElementById('btn-ai-onboarding');
+  if (aiOnboardBtn) {
+    aiOnboardBtn.addEventListener('click', async () => {
+      const projSelect = document.getElementById('health-project-select');
+      const projectId = projSelect ? projSelect.value : null;
+      if (!projectId) return showToast('Please select a project first.', 'error');
+
+      showAIModal('Get Started Guide', 'Creating a beginner-friendly guide to get started with this project...');
+      try {
+        const res = await API.aiOnboardingProject(projectId);
+        renderAIModalContent(res.content);
+      } catch (err) {
+        renderAIModalContent(`Could not generate guide: ${err.message}`);
+      }
+    });
+  }
+
+  // --- THEME & SETTINGS MANAGEMENT ---
+  function applyTheme(choice) {
+    let resolvedTheme = choice;
+    if (choice === 'system') {
+      resolvedTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    }
+    document.documentElement.setAttribute('data-theme', resolvedTheme);
+
+    document.querySelectorAll('.theme-option-btn').forEach((btn) => {
+      btn.classList.toggle('active', btn.getAttribute('data-theme-choice') === choice);
+    });
+  }
+
+  function initThemeAndPreferences() {
+    const savedTheme = localStorage.getItem('svant_theme') || 'light';
+    applyTheme(savedTheme);
+
+    // Watch OS system preference changes
+    try {
+      const darkMediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+      darkMediaQuery.addEventListener('change', () => {
+        if ((localStorage.getItem('svant_theme') || 'light') === 'system') {
+          applyTheme('system');
+        }
+      });
+    } catch (_) {}
+
+    // Theme switcher buttons
+    document.querySelectorAll('.theme-option-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const choice = btn.getAttribute('data-theme-choice');
+        if (!choice) return;
+        localStorage.setItem('svant_theme', choice);
+        applyTheme(choice);
+        const labels = { light: 'Light Theme', dark: 'Dark Theme', system: 'System Theme' };
+        showToast(`Theme switched to ${labels[choice] || choice}`, 'info');
+      });
+    });
+
+    // Default search method preference
+    const searchPrefSelect = document.getElementById('setting-default-search');
+    if (searchPrefSelect) {
+      const savedSearch = localStorage.getItem('svant_default_search') || 'hybrid';
+      searchPrefSelect.value = savedSearch;
+      state.searchMode = savedSearch;
+
+      searchPrefSelect.addEventListener('change', (e) => {
+        const val = e.target.value;
+        localStorage.setItem('svant_default_search', val);
+        state.searchMode = val;
+
+        // Sync Search page mode tabs
+        document.querySelectorAll('.mode-tab').forEach((t) => {
+          t.classList.toggle('active', t.dataset.mode === val);
+        });
+
+        // Sync AI Chat mode dropdown
+        const chatModeSelect = document.getElementById('chat-mode-select');
+        if (chatModeSelect) chatModeSelect.value = val;
+
+        const modeNames = { hybrid: 'Smart Search', semantic: 'Search by Meaning', keyword: 'Search by Words' };
+        showToast(`Default search preference saved: ${modeNames[val] || val}`, 'success');
+      });
+    }
+
+    // Set AI Assistant search mode selector to default
+    const chatModeSelect = document.getElementById('chat-mode-select');
+    if (chatModeSelect) {
+      chatModeSelect.value = localStorage.getItem('svant_default_search') || 'hybrid';
+    }
+  }
+
   // Initial load
+  initThemeAndPreferences();
   checkHealth();
   loadDashboardData();
   updateAIStatusBadge();
-  setInterval(checkHealth, 15000); // 15s health heartbeat
+  setInterval(checkHealth, 15000);
 });

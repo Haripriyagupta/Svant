@@ -64,7 +64,7 @@ class HygieneAnalyzer:
                     category=FindingCategory.HYGIENE,
                     severity=FindingSeverity.MEDIUM if wasted_mb > 5.0 else FindingSeverity.LOW,
                     priority_tier=PriorityTier.SHOULD_FIX,
-                    title=f"Duplicate files detected ({len(duplicate_clusters)} identical content groups)",
+                    title=f"Duplicate files detected ({len(duplicate_clusters)} duplicate groups)",
                     description=(
                         f"Found {total_dup_files} files across {len(duplicate_clusters)} duplicate groups, "
                         f"wasting approximately {wasted_mb:.2f} MB of local storage. "

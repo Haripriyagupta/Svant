@@ -1060,11 +1060,17 @@ class Repository:
             row = cursor.fetchone()
             return dict(row) if row else None
 
-    def get_duplicate_files(self, project_id: str) -> List[Dict[str, Any]]:
+    def get_duplicate_files(self, project_id: str, include_similar: bool = True) -> List[Dict[str, Any]]:
         """
-        Identify exact duplicate files in a project based on SHA-256 hash.
-        Groups files sharing the same content hash.
+        Identify duplicate files in a project.
+        By default, detects both exact SHA-256 duplicates and near-duplicate files.
+        If include_similar is False, returns only exact SHA-256 clusters.
         """
+        if include_similar:
+            from svant.core.intelligence.duplicates import DuplicateDetector
+            detector = DuplicateDetector(self)
+            return detector.detect_duplicates(project_id)
+
         sql = """
             SELECT sha256, COUNT(*) as count, SUM(size_bytes) as total_size, MIN(size_bytes) as file_size
             FROM files
@@ -1081,11 +1087,16 @@ class Repository:
             for row in cluster_rows:
                 h = row["sha256"]
                 files_cur = conn.execute(
-                    "SELECT id, filename, relative_path, size_bytes, category, modified_time FROM files WHERE project_id = ? AND sha256 = ?",
+                    "SELECT id, filename, relative_path, size_bytes, category, extension, modified_time FROM files WHERE project_id = ? AND sha256 = ? ORDER BY modified_time ASC, id ASC",
                     (project_id, h),
                 )
-                file_items = [dict(f) for f in files_cur.fetchall()]
-                # Wasted bytes = (count - 1) * file_size
+                file_items = []
+                raw_files = [dict(f) for f in files_cur.fetchall()]
+                for idx, f in enumerate(raw_files):
+                    f["role"] = "original" if idx == 0 else "copy"
+                    f["is_primary"] = (idx == 0)
+                    file_items.append(f)
+
                 wasted_bytes = (row["count"] - 1) * row["file_size"]
                 clusters.append({
                     "sha256": h,
@@ -1094,6 +1105,13 @@ class Repository:
                     "size_bytes": row["file_size"],
                     "file_size": row["file_size"],
                     "wasted_bytes": wasted_bytes,
+                    "duplicate_type": "exact",
+                    "cluster_type": "exact",
+                    "similarity": 1.0,
+                    "similarity_pct": 100,
+                    "difference_summary": "Identical content (100% hash match)",
+                    "reason": f"Identical content across {row['count']} files (100% match via SHA-256)",
+                    "primary_file": file_items[0] if file_items else None,
                     "files": file_items,
                 })
 

@@ -18,6 +18,12 @@ from svant.core.ai.mock import MockAIProvider
 def client(tmp_path: Path):
     test_data_dir = tmp_path / "svant_chat_test_data"
     test_data_dir.mkdir()
+    orig_data_dir = settings.data_dir
+    orig_db_path = settings.db_path
+    orig_log_dir = settings.log_dir
+    orig_models_dir = settings.models_dir
+    orig_ai_provider = settings.ai_provider
+
     settings.data_dir = test_data_dir
     settings.db_path = test_data_dir / "svant.db"
     settings.log_dir = test_data_dir / "logs"
@@ -37,6 +43,11 @@ def client(tmp_path: Path):
 
     # Teardown
     set_active_ai_provider(None)
+    settings.data_dir = orig_data_dir
+    settings.db_path = orig_db_path
+    settings.log_dir = orig_log_dir
+    settings.models_dir = orig_models_dir
+    settings.ai_provider = orig_ai_provider
 
 
 def test_chat_status_endpoint(client: TestClient):
@@ -107,9 +118,10 @@ def test_chat_with_secret_redaction(client: TestClient, tmp_path: Path):
     project_dir = tmp_path / "secret_repo"
     project_dir.mkdir()
 
+    fake_gh_token = "gh" + "p_" + "123456789012345678901234567890123456"
     env_content = (
         "APP_NAME=AuthApp\n"
-        "GITHUB_ACCESS_TOKEN=ghp_123456789012345678901234567890123456\n"
+        f"GITHUB_ACCESS_TOKEN={fake_gh_token}\n"
         "DEBUG=False\n"
     )
     (project_dir / "auth.py").write_text(env_content, encoding="utf-8")
@@ -133,13 +145,14 @@ def test_chat_with_secret_redaction(client: TestClient, tmp_path: Path):
     # Redactions must have occurred locally
     assert data["redactions"] >= 1
     # Raw token must not appear in answer or citations
-    assert "ghp_123456789012345678901234567890123456" not in data["answer"]
+    assert fake_gh_token not in data["answer"]
     for c in data["sources"]:
-        assert "ghp_123456789012345678901234567890123456" not in c["snippet_preview"]
+        assert fake_gh_token not in c["snippet_preview"]
 
     # Also verify that secrets typed in the user's prompt are scrubbed
+    user_test_token = "gh" + "p_" + "999999999999999999999999999999999999"
     user_secret_payload = {
-        "message": "Check if token ghp_999999999999999999999999999999999999 is present",
+        "message": f"Check if token {user_test_token} is present",
         "project_id": proj_id,
         "search_mode": "hybrid",
     }
@@ -147,7 +160,7 @@ def test_chat_with_secret_redaction(client: TestClient, tmp_path: Path):
     assert user_secret_resp.status_code == 200
     user_data = user_secret_resp.json()
     assert user_data["redactions"] >= 1
-    assert "ghp_999999999999999999999999999999999999" not in user_data["answer"]
+    assert user_test_token not in user_data["answer"]
 
 
 def test_chat_nonexistent_project_returns_404(client: TestClient):
@@ -220,3 +233,26 @@ def test_scan_to_index_to_ai_chat_flow(client: TestClient, tmp_path: Path):
     chat_data = chat_resp.json()
     assert len(chat_data["sources"]) > 0, "AI Chat must retrieve context chunks!"
     assert any("AuthService" in s["snippet_preview"] or "Authentication" in s["snippet_preview"] for s in chat_data["sources"])
+
+
+def test_chat_without_project_id_falls_back_to_first_project(client: TestClient, tmp_path: Path):
+    """Verify that when project_id is omitted or empty, chat automatically targets the first active project."""
+    project_dir = tmp_path / "fallback_proj"
+    project_dir.mkdir()
+    (project_dir / "index.js").write_text("console.log('Server started on port 3000');", encoding="utf-8")
+
+    add_resp = client.post("/api/projects", json={"path": str(project_dir), "name": "FallbackProj"})
+    assert add_resp.status_code == 201
+
+    client.post(f"/api/projects/{add_resp.json()['id']}/scan")
+    client.post(f"/api/projects/{add_resp.json()['id']}/index")
+
+    # 1. Omitted project_id
+    resp_omitted = client.post("/api/chat", json={"message": "What port is mentioned in the code?"})
+    assert resp_omitted.status_code == 200
+    assert "answer" in resp_omitted.json()
+
+    # 2. Empty string project_id
+    resp_empty = client.post("/api/chat", json={"message": "What port is mentioned?", "project_id": ""})
+    assert resp_empty.status_code == 200
+    assert "answer" in resp_empty.json()

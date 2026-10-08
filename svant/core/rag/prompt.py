@@ -40,13 +40,23 @@ class GroundedPromptBuilder:
         self,
         question: str,
         formatted_context: str,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
     ) -> str:
-        """Combine user question with the formatted, sanitized project context."""
+        """Combine user question with the formatted, sanitized project context and optional dialogue history."""
         clean_q = question.strip()
-        return (
-            f"PROJECT EVIDENCE:\n"
-            f"{formatted_context}\n\n"
-            f"DEVELOPER QUESTION:\n"
-            f"{clean_q}\n\n"
-            f"Please provide a grounded answer based on the evidence above."
-        )
+        parts = [f"PROJECT EVIDENCE:\n{formatted_context}\n"]
+
+        if conversation_history:
+            recent_turns = conversation_history[-4:]
+            hist_lines = []
+            for turn in recent_turns:
+                role = turn.get("role", "user").capitalize()
+                content = turn.get("content", "").strip()
+                if content:
+                    hist_lines.append(f"{role}: {content}")
+            if hist_lines:
+                parts.append("RECENT CONVERSATION HISTORY:\n" + "\n".join(hist_lines) + "\n")
+
+        parts.append(f"DEVELOPER QUESTION:\n{clean_q}\n")
+        parts.append("Please provide a grounded answer based on the evidence above.")
+        return "\n".join(parts)

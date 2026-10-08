@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 
 from svant.core.intelligence.dependencies import DependencyAnalyzer
 from svant.core.intelligence.documentation import DocumentationAnalyzer
+from svant.core.intelligence.duplicates import DuplicateDetector
 from svant.core.intelligence.hygiene import HygieneAnalyzer
 from svant.core.intelligence.inventory import ProjectInventoryBuilder
 from svant.core.intelligence.models import (
@@ -57,6 +58,7 @@ class ProjectIntelligenceEngine:
         self.documentation_analyzer = DocumentationAnalyzer(repo)
         self.hygiene_analyzer = HygieneAnalyzer(repo)
         self.quality_analyzer = QualityAnalyzer(repo)
+        self.duplicate_detector = DuplicateDetector(repo)
         self.scorer = HealthScorer()
         self.prioritizer = PrioritizationEngine()
 
@@ -246,8 +248,8 @@ class ProjectIntelligenceEngine:
         return inventory.to_dict()
 
     def get_duplicates(self, project_id: str) -> List[Dict[str, Any]]:
-        """Identify identical duplicate files grouped by content SHA-256 hash."""
-        return self.repo.get_duplicate_files(project_id)
+        """Identify exact and near-duplicate files in project."""
+        return self.duplicate_detector.detect_duplicates(project_id)
 
     def update_finding_status(
         self,
